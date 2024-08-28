@@ -168,7 +168,7 @@ class AbstractRegressionModel(RngKeyMixin):
                             infinite: bool = True) -> tf.data.Dataset:
         ds = tf.data.Dataset.from_tensor_slices((x_data, y_data))
         if shuffle:
-            seed = int(jax.random.randint(self.rng_key, (1,), 0, 10 ** 8))
+            seed = int(jax.random.randint(self.rng_key, (1,), 0, 10 ** 8)[0])
             ds = ds.shuffle(batch_size * 4, seed=seed, reshuffle_each_iteration=True)
         if infinite:
             ds = ds.repeat()

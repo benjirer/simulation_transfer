@@ -5,11 +5,12 @@ import jax
 import jax.numpy as jnp
 
 from functools import partial
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union, Tuple
 from brax.training.types import Transition
 
 from experiments.util import load_csv_recordings
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
+from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
 from sim_transfer.sims.simulators import StackedActionSimWrapper
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
 
@@ -52,10 +53,26 @@ DEFAULTS_RACECAR_REAL = {
     'num_samples_test': 10000
 }
 
+DEFAULTS_SPOT = {
+    'obs_noise_std': SPOT_DEFAULT_OBSERVATION_NOISE_STD,
+    'x_support_mode_train': 'full',
+    'param_mode': 'random',
+}
+
+DEFAULTS_SPOT_REAL = {
+    'sampling': 'consecutive',
+    'num_samples_test': 100
+}
+
 _RACECAR_NOISE_STD_ENCODED = 20 * jnp.concatenate([DEFAULTS_RACECAR['obs_noise_std'][:2],
                                                    DEFAULTS_RACECAR['obs_noise_std'][2:3],
                                                    DEFAULTS_RACECAR['obs_noise_std'][2:3],
                                                    DEFAULTS_RACECAR['obs_noise_std'][3:]])
+
+_SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate([DEFAULTS_SPOT['obs_noise_std'][:2],
+                                                DEFAULTS_SPOT['obs_noise_std'][2:3],
+                                                DEFAULTS_SPOT['obs_noise_std'][2:3],
+                                                DEFAULTS_SPOT['obs_noise_std'][3:]])
 
 DATASET_CONFIGS = {
     'sinusoids1d': {
@@ -120,6 +137,14 @@ DATASET_CONFIGS = {
     },
     'racecar_hf_no_angvel': {
         'likelihood_std': {'value': _RACECAR_NOISE_STD_ENCODED.tolist()},
+        'num_samples_train': {'value': 100},
+    },
+    'spot': {
+        'likelihood_std': {'value': _SPOT_NOISE_STD_ENCODED.tolist()},
+        'num_samples_train': {'value': 100},
+    },
+    'spot_real': {
+        'likelihood_std': {'value': _SPOT_NOISE_STD_ENCODED.tolist()},
         'num_samples_train': {'value': 100},
     },
 }
@@ -259,6 +284,88 @@ def get_rccar_recorded_data_new(encode_angle: bool = True, skip_first_n_points: 
     # split into train and test
     x_train, y_train, x_test, y_test = x[:-num_test_points], y[:-num_test_points], \
         x[-num_test_points:], y[-num_test_points:]
+    return x_train, y_train, x_test, y_test
+
+    
+def _load_spot_datasets(file_path: Union[str, List[str]]):
+    if isinstance(file_path, list):
+        dataset = []
+        for path in file_path:
+            with open(path, "rb") as f:
+                dataset.append(pickle.load(f))
+    else:
+        with open(file_path, "rb") as f:
+            dataset = pickle.load(f)
+    return dataset
+
+
+def _prepare_spot_datasets(dataset_pre: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], encode_angles: bool = False, skip_first_n: int = 5,
+                                    action_delay_base: int = 2, action_delay_ee: int = 1, angle_idx: int = 2):
+    assert action_delay_base >= 0 and action_delay_ee >= 0, "Action delay must be non-negative"
+    
+    # unpack dataset
+    x, u, y = dataset_pre
+
+    # apply action delay
+    u_base, u_ee = u[:, :3], u[:, 3:]
+    if action_delay_base > 0:
+        u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])
+        u_delayed_base = jnp.concatenate(
+            [u_delayed_start, u_base[:-action_delay_base]]
+        )
+        assert (
+            u_delayed_base.shape == u_base.shape
+        ), "Something went wrong with the base action delay"
+        u_base = u_delayed_base
+
+    if action_delay_ee > 0:
+        u_delayed_start = jnp.zeros_like(u_ee[:action_delay_ee])
+        u_delayed_ee = jnp.concatenate([u_delayed_start, u_ee[:-action_delay_ee]])
+        assert (
+            u_delayed_ee.shape == u_ee.shape
+        ), "Something went wrong with the ee action delay"
+        u_ee = u_delayed_ee
+
+    u = jnp.concatenate([u_base, u_ee], axis=-1)
+
+    # project theta into [-\pi, \pi] and encode angles
+    x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+    y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+    if encode_angles:
+        x = encode_angles_fn(x, angle_idx=angle_idx)
+        y = encode_angles_fn(y, angle_idx=angle_idx)
+
+    # remove first n steps (since often not much is happening)
+    x, u, y = x[skip_first_n:], u[skip_first_n:], y[skip_first_n:]
+
+    # concatenate state and action
+    x_data = jnp.concatenate([x, u], axis=-1)  # current state + action
+    y_data = y  # next state
+
+    # check shapes
+    assert x_data.shape[0] == y_data.shape[0]
+    assert x_data.shape[1] - 6 == y_data.shape[1] # - 6 since action is 6D
+
+    return x_data, y_data
+
+
+def get_spot_recorded_data(encode_angle: bool = True, skip_first_n_points: int = 5, dataset: str = "all", action_delay_base: int = 2, action_delay_ee: int = 1, angle_idx: int = 2):
+    recordings_dir = os.path.join(DATA_DIR, 'recordings_spot_v0')
+    files = sorted(glob.glob(recordings_dir + '/*.pickle'))
+
+    # load datasets
+    datasets_pre = _load_spot_datasets(files)
+
+    # transform transitions into supervised learning datasets
+    prep_fn = partial(_prepare_spot_datasets, encode_angles=encode_angle, skip_first_n=skip_first_n_points,
+                        action_delay_base=action_delay_base, action_delay_ee=action_delay_ee, angle_idx=angle_idx)
+    x, y = map(lambda x: jnp.concatenate(x, axis=0), zip(*map(prep_fn, datasets_pre)))
+    indices = jnp.arange(start=0, stop=x.shape[0], step=1)
+    indices = jax.random.permutation(key=jax.random.PRNGKey(9345), x=indices, independent=True)
+    x, y = x[indices], y[indices]
+
+    # split into train and test
+    x_train, y_train, x_test, y_test = x[:-100], y[:-100], x[-100:], y[-100:]
     return x_train, y_train, x_test, y_test
 
 
@@ -479,6 +586,44 @@ def provide_data_and_sim(data_source: str, data_spec: Dict[str, Any], data_seed:
             y_train = y_train[..., :-1]
             y_test = y_test[..., :-1]
         return x_train, y_train, x_test, y_test, sim_lf
+    
+    # Spot robot
+    elif data_source.startswith('spot'):
+        from sim_transfer.sims.simulators import SpotSim
+        defaults = DEFAULTS_SPOT
+        if data_source == 'spot_real':
+            sim_hf = sim_lf = SpotSim(encode_angle=True)
+            print('[data_provider] Using real Spot data')
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(encode_angle=True)
+
+            num_train_available = x_train.shape[0]
+            num_test_available = x_test.shape[0]
+
+            num_train = data_spec['num_samples_train']
+            num_test = data_spec.get('num_samples_test', DEFAULTS_SPOT_REAL['num_samples_test'])
+            assert num_train <= num_train_available and num_test <= num_test_available, f'{num_train} > {num_train_available} or {num_test} > {num_test_available}'
+            sampling_scheme = data_spec.get('sampling', DEFAULTS_SPOT_REAL['sampling'])
+            if sampling_scheme == 'iid':
+                # sample random subset (datapoints are not adjacent in time)
+                import warnings
+                if num_train > num_train_available / 4.:
+                    warnings.warn(f'Not enough data for {num_train} iid samples.'
+                                  f'Requires at lest 4 times as much data as requested '
+                                  f'iid samples.')
+                idx_train = jax.random.choice(key_train, jnp.arange(num_train_available), shape=(num_train,),
+                                              replace=False)
+                idx_test = jax.random.choice(key_test, jnp.arange(num_test_available), shape=(num_test,), replace=False)
+            elif sampling_scheme == 'consecutive':
+                # sample random sub-trajectory (datapoints are adjacent in time -> highly correlated)
+                offset_train = jax.random.choice(key_train, jnp.arange(num_train_available - num_train))
+                offset_test = jax.random.choice(key_test, jnp.arange(num_test_available - num_test + 1))
+                idx_train = jnp.arange(num_train) + offset_train
+                idx_test = jnp.arange(num_test) + offset_test
+            else:
+                raise ValueError(f'Unknown sampling scheme {sampling_scheme}. Needs to be one of ["iid", "consecutive"].')
+            
+            x_train, y_train, x_test, y_test = x_train[idx_train], y_train[idx_train], x_test[idx_test], y_test[idx_test]
+            return x_train, y_train, x_test, y_test, sim_lf
 
     else:
         raise ValueError('Unknown data source %s' % data_source)
@@ -497,8 +642,12 @@ def provide_data_and_sim(data_source: str, data_spec: Dict[str, Any], data_seed:
 if __name__ == '__main__':
     # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='real_racecar_new',
     #                                                              data_spec={'num_samples_train': 10000})
-    x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='racecar_hf',
-                                                                 data_spec={'num_samples_train': 10000})
+    # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='racecar_hf',
+    #                                                              data_spec={'num_samples_train': 10000})
+
+    # test spot data
+    x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='spot_real',
+                                                                 data_spec={'num_samples_train': 400})
     print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
 
     print(jnp.max(x_train, axis=0))

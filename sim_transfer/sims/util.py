@@ -140,3 +140,115 @@ def plot_rc_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, pos
         fig.show()
     return fig, axes
 
+def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, pos_domain_size: float = 5, encode_angle: bool = False, extended: bool = False):
+    """ Plots the trajectory of the spot robot """
+
+    import matplotlib.pyplot as plt
+    import jax.numpy as jnp
+
+    if extended:
+        scale_factor = 1.5
+        n_rows = traj.shape[-1]
+        n_cols = 2 if actions is not None else 1
+
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(scale_factor * 8, scale_factor * 10))
+        fig.tight_layout(pad=2.0)
+
+        state_labels = ['base_x', 'base_y', 'base_theta', 'base_vx', 'base_vy', 'base_vtheta', 'ee_x', 'ee_y', 'ee_z', 'ee_vx', 'ee_vy', 'ee_vz']
+        action_labels = ['base_vx_action', 'base_vy_action', 'base_vtheta_action', 'ee_vx_action', 'ee_vy_action', 'ee_vz_action'] 
+
+        traj_min = jnp.min(traj)
+        traj_max = jnp.max(traj)
+        common_y_range = (traj_min, traj_max)
+
+        for i in range(n_rows):
+            axes[i][0].plot(traj[:, i])
+            axes[i][0].set_ylabel(state_labels[i])
+            axes[i][0].set_title(state_labels[i])
+            axes[i][0].set_ylim(common_y_range)
+
+            if i == n_rows - 1:
+                axes[i][0].set_xlabel('time')
+
+        if actions is not None:
+            action_min = jnp.min(actions)
+            action_max = jnp.max(actions)
+            action_y_range = (action_min, action_max)
+
+            axes[3][1].plot(actions[:, 0])
+            axes[3][1].set_ylabel(action_labels[0])
+            axes[3][1].set_title(action_labels[0])
+            axes[3][1].set_ylim(action_y_range)
+
+            axes[4][1].plot(actions[:, 1])
+            axes[4][1].set_ylabel(action_labels[1])
+            axes[4][1].set_title(action_labels[1])
+            axes[4][1].set_ylim(action_y_range)
+
+            axes[5][1].plot(actions[:, 2])
+            axes[5][1].set_ylabel(action_labels[2])
+            axes[5][1].set_title(action_labels[2])
+            axes[5][1].set_ylim(action_y_range)
+
+            axes[9][1].plot(actions[:, 3])
+            axes[9][1].set_ylabel(action_labels[3])
+            axes[9][1].set_title(action_labels[3])
+            axes[9][1].set_ylim(action_y_range)
+
+            axes[10][1].plot(actions[:, 4])
+            axes[10][1].set_ylabel(action_labels[4])
+            axes[10][1].set_title(action_labels[4])
+            axes[10][1].set_ylim(action_y_range)
+
+            axes[11][1].plot(actions[:, 5])
+            axes[11][1].set_xlabel('time')
+            axes[11][1].set_ylabel(action_labels[5])
+            axes[11][1].set_title(action_labels[5])
+            axes[11][1].set_ylim(action_y_range)
+
+            # hide unused action subplots
+            axes[0][1].axis('off')
+            axes[1][1].axis('off')
+            axes[2][1].axis('off')
+
+            axes[6][1].axis('off')
+            axes[7][1].axis('off')
+            axes[8][1].axis('off')
+
+    else:
+
+        state_label_dict = {
+            0: 'base_x',
+            1: 'base_y',
+            2: 'base_theta',
+            6: 'ee_x',
+            7: 'ee_y',
+            8: 'ee_z',
+        }
+
+        scale_factor = 1.5
+        n_rows = len(state_label_dict)
+        n_cols = 1
+
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(scale_factor * 8, scale_factor * 10))
+        fig.tight_layout(pad=2.0)
+
+        for i, key in zip(range(n_rows), state_label_dict.keys()):
+            if key == 2:
+                theta_unwrapped = np.unwrap(traj[:, key].astype(np.float64))
+                axes[i].plot(theta_unwrapped)
+            else:
+                axes[i].plot(traj[:, key])
+            axes[i].set_ylabel(state_label_dict[key])
+            axes[i].set_title(state_label_dict[key])
+
+            if i == n_rows - 1:
+                axes[i].set_xlabel('time')
+    plt.show()
+
+
+
+
+
+
+

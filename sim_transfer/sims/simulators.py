@@ -3,6 +3,7 @@ from typing import Callable, Tuple, Dict, Optional, List, Union, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.numpy import ndarray
 import jax.tree_util as jtu
 import tensorflow_probability.substrates.jax.distributions as tfd
 from jax import vmap, random
@@ -11,7 +12,7 @@ from tensorflow_probability.substrates import jax as tfp
 
 from sim_transfer.sims.domain import Domain, HypercubeDomain, HypercubeDomainWithAngles
 from sim_transfer.sims.dynamics_models import Pendulum, PendulumParams, RaceCar, CarParams, \
-    SergioParams, SergioDynamics, GreenHouseParams, GreenHouseDynamics
+    SergioParams, SergioDynamics, GreenHouseParams, GreenHouseDynamics, SpotParams, SpotDynamicsModel
 from sim_transfer.sims.util import encode_angles, decode_angles
 
 
@@ -1459,6 +1460,260 @@ class StackedActionSimWrapper(FunctionSimulator):
         return fun_vals
 
 
+class SpotSim(FunctionSimulator):
+    _dt: float = 1 / 10.0
+    _angle_idx: int = 2
+
+    # domain for simulator prior
+    _domain_lower = jnp.array(
+        [   
+            # base pos
+            -2.5,
+            -2.5,
+            -jnp.pi,
+            # base vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee pos
+            -2.5,
+            -2.5,
+            0.1,
+            # ee vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # base action
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee action
+            -1.0,
+            -1.0,
+            -1.0,
+        ]
+    )
+    _domain_upper = jnp.array(
+        [
+            # base pos
+            4.5,
+            2.5,
+            jnp.pi,
+            # base vel
+            1.0,
+            1.0,
+            1.0,
+            # ee pos
+            4.5,
+            2.5,
+            1.8,
+            # ee vel
+            1.0,
+            1.0,
+            1.0,
+            # base action
+            1.0,
+            1.0,
+            1.0,
+            # ee action
+            1.0,
+            1.0,
+            1.0,
+        ]
+    )
+
+    # domain for generating data
+    _domain_lower_dataset = _domain_lower
+    _domain_upper_dataset = _domain_upper
+
+    def __init__(self, encode_angle: bool = True):
+        """
+        Spot with arm simulator.
+
+        Args:
+            encode_angle: (bool) whether to encode the heading angle (theta) as sin(theta) and cos(theta)
+        """
+        _output_size = 13 if encode_angle else 12
+        FunctionSimulator.__init__(
+            self, input_size=19 if encode_angle else 18, output_size=_output_size
+        )
+
+        # set params
+        self._set_default_params()
+        _default_params = self._default_spot_model_params
+        self._typical_params = SpotParams(**_default_params)
+
+        # set model
+        self.encode_angle = encode_angle
+        self.model = SpotDynamicsModel(self._dt, encode_angle=encode_angle)
+        self.state_action_split_idx = 13 if encode_angle else 12
+
+        # set parameter bounds
+        _bounds_spot_model_params = self._bounds_spot_model_params
+        self._lower_bound_params = SpotParams(**{k: jnp.array(v[0]) for k, v in _bounds_spot_model_params.items()})
+        self._upper_bound_params = SpotParams(**{k: jnp.array(v[1]) for k, v in _bounds_spot_model_params.items()})
+        assert jnp.all(
+            jnp.stack(
+                jtu.tree_flatten(
+                    jtu.tree_map(
+                        lambda l, u: l <= u,
+                        self._lower_bound_params,
+                        self._upper_bound_params,
+                    )
+                )[0]
+            )
+        ), "lower bounds have to be smaller than upper bounds"
+
+        # setup domain
+        self._domain = self._create_domain(self._domain_lower, self._domain_upper)
+
+    def init_params(self):
+        return self._typical_params
+
+    def sample_params(self, rng_key: jax.random.PRNGKey):
+        params = self.model.sample_params_uniform(
+            rng_key,
+            sample_shape=(1,),
+            lower_bound=self._lower_bound_params,
+            upper_bound=self._upper_bound_params,
+        )
+        params = jtu.tree_map(lambda x: x.item(), params)
+        train_params = jtu.tree_map(lambda x: 1, params)
+        return params, train_params
+
+    def sample_function_vals(
+        self, x: jnp.ndarray, num_samples: int, rng_key: jax.random.PRNGKey
+    ) -> jnp.ndarray:
+        assert x.ndim == 2 and x.shape[-1] == self.input_size
+        params = self.model.sample_params_uniform(
+            rng_key,
+            sample_shape=num_samples,
+            lower_bound=self._lower_bound_params,
+            upper_bound=self._upper_bound_params,
+        )
+
+        def batched_fun(z, params):
+            x, u = self._split_state_action(z)
+            f = vmap(self.model.next_step, in_axes=(0, 0, None))(x, u, params)
+            return f
+
+        f = vmap(batched_fun, in_axes=(None, 0))(x, params)
+        assert f.shape == (num_samples, x.shape[0], self.output_size)
+        return f
+
+    def sample_functions(
+        self, num_samples: int, rng_key: jax.random.PRNGKey
+    ) -> Callable:
+        params = self.model.sample_params_uniform(
+            rng_key,
+            sample_shape=(num_samples,),
+            lower_bound=self._lower_bound_params,
+            upper_bound=self._upper_bound_params,
+        )
+
+        def stacked_fun(z):
+            x, u = self._split_state_action(z)
+            f = vmap(self.model.next_step, in_axes=(0, 0, 0))(x, u, params)
+            return f
+
+        return stacked_fun
+
+    @property
+    def domain(self) -> Domain:
+        return self._domain
+
+    @property
+    def normalization_stats(self) -> Dict[str, jnp.ndarray]:
+        from sim_transfer.sims.spot_sim_config import SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE, SPOT_MODEL_NORMALIZATION_STATS
+
+        if self.encode_angle:
+            stats = {
+                "x_mean": jnp.zeros(self.input_size),
+                "x_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["x_std"],
+                "y_mean": jnp.zeros(self.output_size),
+                "y_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["y_std"],
+            }
+            assert stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,), "std and mean should have same shape"
+        else:
+            stats = {
+                "x_mean": jnp.zeros(self.input_size),
+                "x_std": SPOT_MODEL_NORMALIZATION_STATS["x_std"],
+                "y_mean": jnp.zeros(self.output_size),
+                "y_std": SPOT_MODEL_NORMALIZATION_STATS["y_std"],
+            }
+            assert stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,), "std and mean should have same shape"
+        return stats
+
+    def _typical_f(self, x: jnp.array) -> jnp.array:
+        s, u = self._split_state_action(x)
+        f = jax.vmap(self.model.next_step, in_axes=(0, 0, None))(
+            s, u, self._typical_params
+        )
+        return f
+
+    def evaluate_sim(self, x: jnp.array, params: NamedTuple) -> jnp.array:
+        s, u = self._split_state_action(x)
+        f = jax.vmap(self.model.next_step, in_axes=(0, 0, None))(s, u, params)
+        return f
+
+    def _split_state_action(self, z: jnp.array) -> Tuple[jnp.array, jnp.array]:
+        assert z.shape[-1] == self.domain.num_dims
+        return (
+            z[..., : self.state_action_split_idx],
+            z[..., self.state_action_split_idx :],
+        )
+
+    def _add_observation_noise(
+        self,
+        f_vals: jnp.ndarray,
+        obs_noise_std: Union[jnp.ndarray, float],
+        rng_key: jax.random.PRNGKey,
+    ) -> jnp.ndarray:
+        if self.encode_angle:
+            f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx)
+            y = f_decoded + obs_noise_std * jax.random.normal(
+                rng_key, shape=f_decoded.shape
+            )
+            y = encode_angles(y, angle_idx=self._angle_idx)
+        else:
+            y = f_vals + obs_noise_std * jax.random.normal(rng_key, shape=f_vals.shape)
+        assert f_vals.shape == y.shape
+        return y
+
+    def _sample_x_data(
+        self,
+        rng_key: jax.random.PRNGKey,
+        num_samples_train: int,
+        num_samples_test: int,
+        support_mode_train: str = "full",
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Sample inputs for training and testing."""
+        dataset_domain = self._create_domain(
+            lower=self._domain_lower_dataset, upper=self._domain_upper_dataset
+        )
+        x_train = dataset_domain.sample_uniformly(
+            rng_key, num_samples_train, support_mode=support_mode_train
+        )
+        x_test = dataset_domain.sample_uniformly(
+            rng_key, num_samples_test, support_mode="full"
+        )
+        return x_train, x_test
+
+    def _create_domain(self, lower: jnp.array, upper: jnp.array) -> Domain:
+        """Creates the domain object from the given lower and up bounds."""
+        if self.encode_angle:
+            return HypercubeDomainWithAngles(
+                angle_indices=[self._angle_idx], lower=lower, upper=upper
+            )
+        else:
+            return HypercubeDomain(lower=lower, upper=upper)
+        
+    def _set_default_params(self):
+        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, bounds_spot_model_params
+        self._default_spot_model_params = SPOT_DEFAULT_PARAMS
+        self._bounds_spot_model_params = bounds_spot_model_params
+
+
 if __name__ == '__main__':
     key1, key2 = jax.random.split(jax.random.PRNGKey(435349), 2)
     key_hf, key_lf = jax.random.split(key1, 2)
@@ -1509,6 +1764,15 @@ if __name__ == '__main__':
     f2 = function_sim._typical_f(x)
     print(jnp.isnan(f1).any())
     print(jnp.isnan(f2).any())
+
+    function_sim = SpotSim(encode_angle=True)
+    x, _ = function_sim._sample_x_data(key1, 1000, 1000)
+
+    f1 = function_sim.sample_function_vals(x, num_samples=10, rng_key=key2)
+    f2 = function_sim._typical_f(x)
+    print(jnp.isnan(f1).any())
+    print(jnp.isnan(f2).any())
+
 
     # function_sim.normalization_stats
     # xs = function_sim.domain.sample_uniformly(key, 100)

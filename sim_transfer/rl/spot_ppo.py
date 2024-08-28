@@ -12,14 +12,13 @@ from jax.lax import scan
 from mbpo.optimizers.policy_optimizers.ppo.ppo import PPO
 from mbpo.systems.brax_wrapper import BraxWrapper
 
-from sim_transfer.sims.car_system import CarSystem
-from sim_transfer.sims.util import plot_rc_trajectory
+from sim_transfer.sims.spot_system import SpotSystem
+from sim_transfer.sims.util import plot_spot_trajectory
 
 ENCODE_ANGLE = False
-system = CarSystem(
+system = SpotSystem(
     encode_angle=ENCODE_ANGLE,
     action_delay=0.00,
-    use_tire_model=True,
 )
 
 # Create replay buffer
@@ -50,7 +49,7 @@ env = BraxWrapper(
     system_params=system.init_params(jr.PRNGKey(0)),
 )
 
-sac_trainer = PPO(
+ppo_trainer = PPO(
     environment=env,
     num_timesteps=100_000,
     episode_length=200,
@@ -78,12 +77,8 @@ sac_trainer = PPO(
     wandb_logging=True,
 )
 
-max_y = 0
-min_y = -100
-
 xdata, ydata = [], []
 times = [datetime.now()]
-
 
 def progress(num_steps, metrics):
     times.append(datetime.now())
@@ -96,14 +91,13 @@ def progress(num_steps, metrics):
     plt.plot(xdata, ydata)
     # plt.show()
 
-
 wandb.init(
-    project="car_ppo_test",
+    project="spot_ppo_test",
 )
 
-params, metrics = sac_trainer.run_training(key=jr.PRNGKey(0), progress_fn=progress)
+params, metrics = ppo_trainer.run_training(key=jr.PRNGKey(0), progress_fn=progress)
 
-make_inference_fn = sac_trainer.make_policy
+make_inference_fn = ppo_trainer.make_policy
 
 print(f"time to jit: {times[1] - times[0]}")
 print(f"time to train: {times[-1] - times[1]}")
@@ -136,4 +130,4 @@ plt.show()
 traj = trajectory[0]
 actions = trajectory[1]
 
-plot_rc_trajectory(traj, actions, encode_angle=ENCODE_ANGLE)
+plot_spot_trajectory(traj, actions, encode_angle=ENCODE_ANGLE)

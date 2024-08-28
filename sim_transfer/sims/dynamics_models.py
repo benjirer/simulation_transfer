@@ -1,6 +1,6 @@
 import os
 from abc import ABC, abstractmethod
-from typing import NamedTuple, Union, Optional, Tuple
+from typing import NamedTuple, Union, Optional, Tuple, Dict
 
 import jax
 import jax.numpy as jnp
@@ -153,6 +153,41 @@ class GreenHouseParams(NamedTuple):
     rh: Union[jax.Array, float] = jnp.array(0.3)  # relative valve opening
     pg: Union[jax.Array, float] = jnp.array(0.475)  # PAR to global radiation ratio
     inj_scale: Union[jax.Array, float] = jnp.array(10 ** (-3))
+
+class SpotParams(NamedTuple):
+    """
+    Spot parameters
+
+    alpha: Weight between current velocity and commanded velocity
+    beta: Offset parameter for each state component
+    gamma: Scaling action parameter
+    """
+    alpha_base_1: jax.Array = jnp.array(0.0)
+    alpha_base_2: jax.Array = jnp.array(0.0)
+    alpha_base_3: jax.Array = jnp.array(0.0)
+    alpha_ee_1: jax.Array = jnp.array(0.0)
+    alpha_ee_2: jax.Array = jnp.array(0.0)
+    alpha_ee_3: jax.Array = jnp.array(0.0)
+
+    beta_base_1: jax.Array = jnp.array(0.0)
+    beta_base_2: jax.Array = jnp.array(0.0)
+    beta_base_3: jax.Array = jnp.array(0.0)
+    beta_base_4: jax.Array = jnp.array(0.0)
+    beta_base_5: jax.Array = jnp.array(0.0)
+    beta_base_6: jax.Array = jnp.array(0.0)
+    beta_ee_1: jax.Array = jnp.array(0.0)
+    beta_ee_2: jax.Array = jnp.array(0.0)
+    beta_ee_3: jax.Array = jnp.array(0.0)
+    beta_ee_4: jax.Array = jnp.array(0.0)
+    beta_ee_5: jax.Array = jnp.array(0.0)
+    beta_ee_6: jax.Array = jnp.array(0.0)
+
+    gamma_base_1: jax.Array = jnp.array(1.0)
+    gamma_base_2: jax.Array = jnp.array(1.0)
+    gamma_base_3: jax.Array = jnp.array(1.0)
+    gamma_ee_1: jax.Array = jnp.array(1.0)
+    gamma_ee_2: jax.Array = jnp.array(1.0)
+    gamma_ee_3: jax.Array = jnp.array(1.0)
 
 
 class DynamicsModel(ABC):
@@ -1108,6 +1143,292 @@ class GreenHouseDynamics(DynamicsModel):
                             keys, lower_bound, upper_bound)
 
 
+class SpotDynamicsModel(DynamicsModel):
+
+    def __init__(
+        self,
+        dt,
+        encode_angle: bool = True,
+        input_in_local_frame: bool = True,
+    ):
+        self.encode_angle = encode_angle
+        self.input_in_local_frame = input_in_local_frame
+        self.x_dim = 12
+        self.u_dim = 6
+        self.angle_idx = 2
+        self.base_velocity_start_idx = 4 if self.encode_angle else 3
+        super().__init__(
+            dt=dt,
+            x_dim=self.x_dim,
+            u_dim=self.u_dim,
+            params=SpotParams(),
+            angle_idx=self.angle_idx,
+            dt_integration=dt,
+        )
+
+    def spot_integration(self, x: jnp.array, u: jnp.array, params: SpotParams):
+        def body(carry, _):
+            """
+            Calculate update, check constraints and return updated state.
+
+            position update: q_t+1 = q_t + dt * dx * gamma + beta_pos
+            velocity update: q_t+1 = dt * dx + beta_vel
+            """
+
+            def constrain_update(carry: jnp.array, q_pre: jnp.array):
+                """
+                Physical system has constraints:
+                    Arm attachment to base: Induces physical constraints on distance between base and end effector
+                    Ground: Induces physical constraints on the z-axis position of the end effector
+
+                Make sure that dynamics model respects these constraints by setting velocities to zero (as the physical system does)
+                """
+                max_distance_ee_base = jnp.array(1.3)
+                min_distance_ee_ground = jnp.array(0.05)
+                # TODO: we could add base z comp to observations and make this more exact
+                base_pos = jnp.concatenate([q_pre[:2], jnp.array([0.445])])
+                ee_pos = q_pre[6:9]
+
+                # distance between base and end effector
+                def true_fun_base(q_pre):
+                    q_pre = q_pre.at[6:9].set(carry[6:9])
+                    return q_pre.at[9:12].set(jnp.zeros(3))
+
+                def false_fun_base(q_pre):
+                    return q_pre
+
+                q_pre = jax.lax.cond(
+                    jnp.linalg.norm(ee_pos - base_pos) > max_distance_ee_base,
+                    true_fun_base,
+                    false_fun_base,
+                    q_pre,
+                )
+
+                # distance between end effector and ground
+                def true_fun_ground(q_pre):
+                    q_pre = q_pre.at[8].set(min_distance_ee_ground)
+                    return q_pre.at[11].set(0.0)
+
+                def false_fun_ground(q_pre):
+                    return q_pre
+
+                q_pre = jax.lax.cond(
+                    ee_pos[2] < min_distance_ee_ground,
+                    true_fun_ground,
+                    false_fun_ground,
+                    q_pre,
+                )
+
+                return q_pre
+
+            dx = self.ode(carry, u, params)
+            q_pre = jnp.zeros_like(carry)
+            q = jnp.zeros_like(carry)
+
+            # get params
+            beta_pos = jnp.array(
+                [
+                    params.beta_base_1,
+                    params.beta_base_2,
+                    params.beta_base_3,
+                    params.beta_ee_1,
+                    params.beta_ee_2,
+                    params.beta_ee_3,
+                ]
+            )
+            beta_vel = jnp.array(
+                [
+                    params.beta_base_4,
+                    params.beta_base_5,
+                    params.beta_base_6,
+                    params.beta_ee_4,
+                    params.beta_ee_5,
+                    params.beta_ee_6,
+                ]
+            )
+            gamma = jnp.array(
+                [
+                    params.gamma_base_1,
+                    params.gamma_base_2,
+                    params.gamma_base_3,
+                    params.gamma_ee_1,
+                    params.gamma_ee_2,
+                    params.gamma_ee_3,
+                ]
+            )
+
+            # positions
+            q_pre = q_pre.at[:3].set(
+                carry[:3] + self.dt_integration * dx[:3] * gamma[:3] + beta_pos[:3]
+            )
+            q_pre = q_pre.at[6:9].set(
+                carry[6:9] + self.dt_integration * dx[6:9] * gamma[3:6] + beta_pos[3:6]
+            )
+
+            # velocities
+            q_pre = q_pre.at[3:6].set(self.dt_integration * dx[3:6] + beta_vel[:3])
+            q_pre = q_pre.at[9:12].set(self.dt_integration * dx[9:12] + beta_vel[3:6])
+
+            # check constraints and update
+            q = constrain_update(carry, q_pre)
+
+            return q, None
+
+        next_state, _ = jax.lax.scan(body, x, xs=None, length=self._num_steps_integrate)
+
+        if self.angle_idx:
+            theta = next_state[..., self.angle_idx]
+            sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
+            next_state = next_state.at[self.angle_idx].set(
+                jnp.arctan2(sin_theta, cos_theta)
+            )
+        return next_state
+
+    def next_step(self, x: jnp.array, u: jnp.array, params: SpotParams) -> jnp.array:
+        if self.encode_angle:
+            x = self.reduce_x(x)
+            next_x = self.spot_integration(x, u, params)
+            next_x = self.expand_x(next_x)
+        else:
+            next_x = self.spot_integration(x, u, params)
+        return next_x
+
+    def reduce_x(self, x):
+        theta = jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
+        x_reduced = jnp.concatenate(
+            [
+                x[..., 0 : self.angle_idx],
+                jnp.atleast_1d(theta),
+                x[..., self.base_velocity_start_idx :],
+            ],
+            axis=-1,
+        )
+        return x_reduced
+
+    def expand_x(self, x):
+        theta = jnp.atleast_1d(x[..., self.angle_idx])
+        x_expanded = jnp.concatenate(
+            [
+                x[..., 0 : self.angle_idx],
+                jnp.sin(theta),
+                jnp.cos(theta),
+                x[..., self.angle_idx + 1 :],
+            ],
+            axis=-1,
+        )
+        return x_expanded
+
+    def transform_input_to_global(self, x, u):
+        # convert input to global frame
+        theta = (
+            jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
+            if self.encode_angle
+            else x[..., self.angle_idx]
+        )
+        cos_theta = jnp.cos(theta)
+        sin_theta = jnp.sin(theta)
+        u_global = jnp.zeros_like(u)
+        u_global = u_global.at[0].set(cos_theta * u[..., 0] - sin_theta * u[..., 1])
+        u_global = u_global.at[1].set(sin_theta * u[..., 0] + cos_theta * u[..., 1])
+        u_global = u_global.at[2].set(u[..., 2])
+        u_global = u_global.at[3].set(cos_theta * u[..., 3] - sin_theta * u[..., 4])
+        u_global = u_global.at[4].set(sin_theta * u[..., 3] + cos_theta * u[..., 4])
+        u_global = u_global.at[5].set(u[..., 5])
+        return u_global
+
+    def calculate_rotation_induced_velocity(self, x, base_vtheta):
+        """
+        Calculate the velocity induced by the rotation of the base
+
+        velocity_magnitude = distance_ee_rot_axis * base_vtheta
+        velocity_direction = perpendicular to the line connecting the rotation axis and the end effector
+        """
+        base_xy_world = jnp.array([x[..., 0], x[..., 1]])
+        ee_xy_world = jnp.array([x[..., 6], x[..., 7]])
+        distance_ee_rot_axis = jnp.linalg.norm(ee_xy_world - base_xy_world, axis=-1)
+        vel_ee_from_rot = distance_ee_rot_axis * base_vtheta
+        alpha = jnp.arctan2(
+            ee_xy_world[0] - base_xy_world[0], ee_xy_world[1] - base_xy_world[1]
+        )
+        vx = -vel_ee_from_rot * jnp.cos(alpha)
+        vy = vel_ee_from_rot * jnp.sin(alpha)
+        return vx, vy
+
+    def _ode(self, x, u, params: SpotParams):
+        """
+        Use kinematic model with weighted velocity between previous and current velocity
+        Note: Need to add base velocity and rotation induced velocity to get end effector velocity in global frame
+
+        velocity_dx = (alpha * previous_velocity + (1 - alpha) * current_velocity + additional_velocities) / dt
+        position_dx = velocity
+        """
+        # convert input to global frame if in local frame
+        if self.input_in_local_frame:
+            u = self.transform_input_to_global(x, u)
+
+        # new velocities
+        base_vx = (
+            params.alpha_base_1 * x[..., 3] + (1 - params.alpha_base_1) * u[..., 0]
+        )
+        base_vy = (
+            params.alpha_base_2 * x[..., 4] + (1 - params.alpha_base_2) * u[..., 1]
+        )
+        base_vtheta = (
+            params.alpha_base_3 * x[..., 5] + (1 - params.alpha_base_3) * u[..., 2]
+        )
+        ee_rotinduced_vx, ee_rotinduced_vy = self.calculate_rotation_induced_velocity(
+            x, base_vtheta
+        )
+        ee_vx = (
+            params.alpha_ee_1 * x[..., 9]
+            + (1 - params.alpha_ee_1) * u[..., 3]
+            + ee_rotinduced_vx
+            + base_vx
+        )
+        ee_vy = (
+            params.alpha_ee_2 * x[..., 10]
+            + (1 - params.alpha_ee_2) * u[..., 4]
+            + ee_rotinduced_vy
+            + base_vy
+        )
+        ee_vz = params.alpha_ee_3 * x[..., 11] + (1 - params.alpha_ee_3) * u[..., 5]
+
+        # positions dx
+        base_x_dot = base_vx
+        base_y_dot = base_vy
+        base_theta_dot = base_vtheta
+        ee_x_dot = ee_vx
+        ee_y_dot = ee_vy
+        ee_z_dot = ee_vz
+
+        # velocities dx
+        base_vx_dot = base_vx / self.dt_integration
+        base_vy_dot = base_vy / self.dt_integration
+        base_vtheta_dot = base_vtheta / self.dt_integration
+        ee_vx_dot = ee_vx / self.dt_integration
+        ee_vy_dot = ee_vy / self.dt_integration
+        ee_vz_dot = ee_vz / self.dt_integration
+
+        dx = jnp.array(
+            [
+                base_x_dot,
+                base_y_dot,
+                base_theta_dot,
+                base_vx_dot,
+                base_vy_dot,
+                base_vtheta_dot,
+                ee_x_dot,
+                ee_y_dot,
+                ee_z_dot,
+                ee_vx_dot,
+                ee_vy_dot,
+                ee_vz_dot,
+            ]
+        )
+
+        return dx
+
+
 if __name__ == "__main__":
     dim_x, dim_y = 10, 10
     sim = SergioDynamics(0.1, dim_x, dim_y)
@@ -1134,7 +1455,6 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(0)
     keys = random.split(key, 4)
     params = vmap(pendulum.sample_params_uniform, in_axes=(0, None, None, None))(keys, 1, lower_bound, upper_bound)
-
 
     def simulate_car(init_pos=jnp.zeros(2), horizon=150):
         dt = 0.1
@@ -1173,6 +1493,5 @@ if __name__ == "__main__":
         plt.ylabel('y-distance in [m]')
         plt.title("Simulation of Car for " + str(int(horizon)))
         plt.show()
-
 
     simulate_car()
