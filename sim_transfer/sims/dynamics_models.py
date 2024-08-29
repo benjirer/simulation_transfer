@@ -1150,9 +1150,11 @@ class SpotDynamicsModel(DynamicsModel):
         dt,
         encode_angle: bool = True,
         input_in_local_frame: bool = True,
+        use_constraints: bool = True,
     ):
         self.encode_angle = encode_angle
         self.input_in_local_frame = input_in_local_frame
+        self.use_constraints = use_constraints
         self.x_dim = 12
         self.u_dim = 6
         self.angle_idx = 2
@@ -1170,18 +1172,49 @@ class SpotDynamicsModel(DynamicsModel):
         def body(carry, _):
             """
             Calculate update, check constraints and return updated state.
-
-            position update: q_t+1 = q_t + dt * dx * gamma + beta_pos
-            velocity update: q_t+1 = dt * dx + beta_vel
             """
 
-            def constrain_update(carry: jnp.array, q_pre: jnp.array):
+            def update_q(carry, dx, gamma, beta_pos, beta_vel):
+                """
+                Calculate update for position and velocity.
+                    Position update: q_t+1 = q_t + dt * dx * gamma + beta_pos
+                    Velocity update: q_t+1 = dt * dx + beta_vel
+                """
+                q = jnp.zeros_like(carry)
+
+                # positions
+                q = q.at[:3].set(
+                    carry[:3] + self.dt_integration * dx[:3] * gamma[:3] + beta_pos[:3]
+                )
+                q = q.at[6:9].set(
+                    carry[6:9]
+                    + self.dt_integration * dx[6:9] * gamma[3:6]
+                    + beta_pos[3:6]
+                )
+
+                # velocities
+                q = q.at[3:6].set(self.dt_integration * dx[3:6] + beta_vel[:3])
+                q = q.at[9:12].set(self.dt_integration * dx[9:12] + beta_vel[3:6])
+
+                return q
+
+            def constrain_update(
+                carry: jnp.array,
+                q_pre: jnp.array,
+                u: jnp.array,
+                params: SpotParams,
+                gamma: jnp.array,
+                beta_pos: jnp.array,
+                beta_vel: jnp.array,
+            ):
                 """
                 Physical system has constraints:
                     Arm attachment to base: Induces physical constraints on distance between base and end effector
                     Ground: Induces physical constraints on the z-axis position of the end effector
 
-                Make sure that dynamics model respects these constraints by setting velocities to zero (as the physical system does)
+                Make sure that dynamics model respects these constraints by:
+                    Arm attachment to base: Set velocity from EE command to zero (velocities induced by base are kept - these can't make EE move outside of constraints)
+                    Ground: Set z-axis velocity to zero and set z-position to limit (EE cannot move through the ground)
                 """
                 max_distance_ee_base = jnp.array(1.3)
                 min_distance_ee_ground = jnp.array(0.05)
@@ -1191,8 +1224,13 @@ class SpotDynamicsModel(DynamicsModel):
 
                 # distance between base and end effector
                 def true_fun_base(q_pre):
-                    q_pre = q_pre.at[6:9].set(carry[6:9])
-                    return q_pre.at[9:12].set(jnp.zeros(3))
+                    # recall dx with EE vel commands set to zero
+                    u_constrained = jnp.concatenate([u[:3], jnp.zeros(2), u[5:]])
+                    dx_constrained = self.ode(q_pre, u_constrained, params)
+                    q_constrained = update_q(
+                        carry, dx_constrained, gamma, beta_pos, beta_vel
+                    )
+                    return q_constrained
 
                 def false_fun_base(q_pre):
                     return q_pre
@@ -1220,10 +1258,6 @@ class SpotDynamicsModel(DynamicsModel):
                 )
 
                 return q_pre
-
-            dx = self.ode(carry, u, params)
-            q_pre = jnp.zeros_like(carry)
-            q = jnp.zeros_like(carry)
 
             # get params
             beta_pos = jnp.array(
@@ -1257,22 +1291,16 @@ class SpotDynamicsModel(DynamicsModel):
                 ]
             )
 
-            # positions
-            q_pre = q_pre.at[:3].set(
-                carry[:3] + self.dt_integration * dx[:3] * gamma[:3] + beta_pos[:3]
+            # get updates
+            dx = self.ode(carry, u, params)
+            q_updated = update_q(carry, dx, gamma, beta_pos, beta_vel)
+
+            # check constraints
+            q_constrained = constrain_update(
+                carry, q_updated, u, params, gamma, beta_pos, beta_vel
             )
-            q_pre = q_pre.at[6:9].set(
-                carry[6:9] + self.dt_integration * dx[6:9] * gamma[3:6] + beta_pos[3:6]
-            )
 
-            # velocities
-            q_pre = q_pre.at[3:6].set(self.dt_integration * dx[3:6] + beta_vel[:3])
-            q_pre = q_pre.at[9:12].set(self.dt_integration * dx[9:12] + beta_vel[3:6])
-
-            # check constraints and update
-            q = constrain_update(carry, q_pre)
-
-            return q, None
+            return q_constrained if self.use_constraints else q_updated, None
 
         next_state, _ = jax.lax.scan(body, x, xs=None, length=self._num_steps_integrate)
 

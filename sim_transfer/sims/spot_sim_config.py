@@ -4,33 +4,33 @@ import jax.numpy as jnp
 ############################################ Spot Params Collection ############################################
 
 ################################ Default Parameters ################################
-# from alpha_set_3
+# from alpha_betavel_gamma_set_3
 
 SPOT_DEFAULT_PARAMS: Dict = {
-    "alpha_base_1": 0.57470965,
-    "alpha_base_2": 0.6886134,
-    "alpha_base_3": -0.12433565,
-    "alpha_ee_1": -0.04858014,
-    "alpha_ee_2": 0.02063864,
-    "alpha_ee_3": -0.4303356,
+    "alpha_base_1": 0.54988676,
+    "alpha_base_2": 0.72230655,
+    "alpha_base_3": 0.19035323,
+    "alpha_ee_1": -0.00180756,
+    "alpha_ee_2": -0.16343307,
+    "alpha_ee_3": -0.07788584,
     "beta_base_1": 0.0,
     "beta_base_2": 0.0,
     "beta_base_3": 0.0,
-    "beta_base_4": 0.0,
-    "beta_base_5": 0.0,
-    "beta_base_6": 0.0,
+    "beta_base_4": -0.00760491,
+    "beta_base_5": -0.00985584,
+    "beta_base_6": -0.00627238,
     "beta_ee_1": 0.0,
     "beta_ee_2": 0.0,
     "beta_ee_3": 0.0,
-    "beta_ee_4": 0.0,
-    "beta_ee_5": 0.0,
-    "beta_ee_6": 0.0,
-    "gamma_base_1": 1.0,
-    "gamma_base_2": 1.0,
-    "gamma_base_3": 1.0,
-    "gamma_ee_1": 1.0,
-    "gamma_ee_2": 1.0,
-    "gamma_ee_3": 1.0,
+    "beta_ee_4": -0.00987195,
+    "beta_ee_5": -0.01045589,
+    "beta_ee_6": -0.01736952,
+    "gamma_base_1": 1.3113967,
+    "gamma_base_2": 1.3319724,
+    "gamma_base_3": 1.2359097,
+    "gamma_ee_1": 1.2208637,
+    "gamma_ee_2": 1.337389,
+    "gamma_ee_3": 1.3245624,
 }
 
 SPOT_DEFAULT_OBSERVATION_NOISE_STD: jnp.array = 0.1 * jnp.exp(

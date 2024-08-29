@@ -115,7 +115,7 @@ def main(args, drop_nan=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Inspect results of a regression experiment.')
-    parser.add_argument('--exp_name', type=str, default='aug24_lfhf')
-    parser.add_argument('--data_source', type=str, default='racecar_hf')
+    parser.add_argument('--exp_name', type=str, default='test_aug28')
+    parser.add_argument('--data_source', type=str, default='spot_real')
     args = parser.parse_args()
     main(args)

@@ -217,6 +217,29 @@ def regression_experiment(
     model.fit_with_scan(x_train, y_train, x_test, y_test, log_to_wandb=use_wandb, log_period=1000)
     # eval model
     eval_metrics = model.eval(x_test, y_test, per_dim_metrics=True)
+
+    # plot trajectory
+    import matplotlib.pyplot as plt
+    import numpy as np
+    n_subplots = int(np.ceil(y_test.shape[-1]/2.0))
+    fig, axs = plt.subplots(n_subplots, 2, figsize=(10, 5))
+    y_pred, _ = model.predict(x_test)
+    labels = ["base_x", "base_y", "base_theta_sin", "base_theta_cos", "base_vel_x", "base_vel_y", "base_ang_vel",
+              "ee_x", "ee_y", "ee_z", "ee_vx", "ee_vy", "ee_vz"]
+    for i in range(n_subplots):
+        axs[i, 0].plot(y_test[:, i], label='true')
+        axs[i, 0].plot(y_pred[:, i], label='pred')
+        axs[i, 0].set_title(labels[i])
+        axs[i, 0].legend()
+
+        if i + 7 < y_test.shape[-1]:
+            axs[i, 1].plot(y_test[:, i + 7], label='true')
+            axs[i, 1].plot(y_pred[:, i + 7], label='pred')
+            axs[i, 1].set_title(labels[i + 7])
+            axs[i, 1].legend()
+
+    plt.show()
+
     return eval_metrics
 
 
@@ -259,7 +282,8 @@ def main(args):
             # We are quite confident about exogenous effects
             exp_params['added_gp_outputscale'][5:] = [0.005 for _ in range(11)]
         else:
-            raise AssertionError('passed negative value for added_gp_outputscale')
+            if exp_params['added_gp_outputscale'] < 0:
+                raise AssertionError('passed negative value for added_gp_outputscale')
     # set likelihood_std to default value if not specified
     if exp_params['likelihood_std'] is None:
         likelihood_std = DATASET_CONFIGS[args.data_source]['likelihood_std']['value']
@@ -329,22 +353,22 @@ if __name__ == '__main__':
     # general args
     parser.add_argument('--exp_result_folder', type=str, default=None)
     parser.add_argument('--exp_name', type=str, default=f'test_{current_date}')
-    parser.add_argument('--use_wandb', type=bool, default=False)
+    parser.add_argument('--use_wandb', type=bool, default=True)
 
     # data parameters
-    parser.add_argument('--data_source', type=str, default='Sergio_hf')
+    parser.add_argument('--data_source', type=str, default='spot_real')
     parser.add_argument('--pred_diff', type=int, default=0)
-    parser.add_argument('--num_samples_train', type=int, default=6400)
+    parser.add_argument('--num_samples_train', type=int, default=400)
     parser.add_argument('--data_seed', type=int, default=77698)
 
     # standard BNN parameters
-    parser.add_argument('--model', type=str, default='BNN_FSVGD_SimPrior_gp')
+    parser.add_argument('--model', type=str, default='BNN_FSVGD_SimPrior_GP')
     parser.add_argument('--model_seed', type=int, default=892616)
     parser.add_argument('--likelihood_std', type=float, default=None)
     parser.add_argument('--learn_likelihood_std', type=int, default=1)
     parser.add_argument('--likelihood_reg', type=float, default=0.0)
     parser.add_argument('--data_batch_size', type=int, default=8)
-    parser.add_argument('--min_train_steps', type=int, default=2500)
+    parser.add_argument('--min_train_steps', type=int, default=6000)
     parser.add_argument('--num_epochs', type=int, default=60)
     parser.add_argument('--max_train_steps', type=int, default=100_000)
     parser.add_argument('--num_sim_model_train_steps', type=int, default=5_000)
