@@ -179,8 +179,8 @@ class GaussianProcessSim(FunctionSimulator):
         if isinstance(length_scale, float):
             self.length_scales = length_scale * jnp.ones((output_size,))
         else:
-            if isinstance(output_scale, list):
-                length_scale = jnp.array(output_scale)
+            if isinstance(length_scale, list): # This should be length_scale not output_scale
+                length_scale = jnp.array(length_scale)
             assert length_scale.shape == (output_size,)
             self.length_scales = length_scale
 

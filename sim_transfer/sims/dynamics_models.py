@@ -1208,7 +1208,7 @@ class SpotDynamicsModel(DynamicsModel):
                 beta_vel: jnp.array,
             ):
                 """
-                Physical system has constraints:
+                The physical system has constraints:
                     Arm attachment to base: Induces physical constraints on distance between base and end effector
                     Ground: Induces physical constraints on the z-axis position of the end effector
 
@@ -1327,7 +1327,7 @@ class SpotDynamicsModel(DynamicsModel):
             [
                 x[..., 0 : self.angle_idx],
                 jnp.atleast_1d(theta),
-                x[..., self.base_velocity_start_idx :],
+                x[..., self.angle_idx + 2 :],
             ],
             axis=-1,
         )
@@ -1348,11 +1348,7 @@ class SpotDynamicsModel(DynamicsModel):
 
     def transform_input_to_global(self, x, u):
         # convert input to global frame
-        theta = (
-            jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
-            if self.encode_angle
-            else x[..., self.angle_idx]
-        )
+        theta = x[..., self.angle_idx] # as x is always reduced
         cos_theta = jnp.cos(theta)
         sin_theta = jnp.sin(theta)
         u_global = jnp.zeros_like(u)

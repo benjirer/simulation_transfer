@@ -459,11 +459,17 @@ if __name__ == "__main__":
     }
     encode_angle = False
     # weights = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    # weights = jnp.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5])
     weights = None
     session_paths = [
-        "data/recordings_spot_v0/dataset_learn_jax_20240815-151559_20240816-105027.pickle",
-        "data/recordings_spot_v0/dataset_learn_jax_20240819-141455_20240820-101740.pickle",
-        "data/recordings_spot_v0/dataset_learn_jax_20240819-142443_20240820-101938.pickle",
+        # "data/recordings_spot_v0/dataset_learn_jax_20240815-151559_20240816-105027.pickle",
+        # "data/recordings_spot_v0/dataset_learn_jax_20240819-141455_20240820-101740.pickle",
+        # "data/recordings_spot_v0/dataset_learn_jax_20240819-142443_20240820-101938.pickle",
+        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v1/dataset_learn_jax_test20240830-111841_v1_1.pickle",
+        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v1/dataset_learn_jax_test20240830-112255_v1_3.pickle",
+        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v2/dataset_learn_jax_test20240903-132044_v2_1.pickle",
+        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v2/dataset_learn_jax_test20240903-132303_v2_2.pickle",
+        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v2/dataset_learn_jax_test20240903-132514_v2_3.pickle",
     ]
 
     saved_params = {}
