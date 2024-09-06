@@ -13,6 +13,8 @@ import optax
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import tensorflow_probability.substrates.jax.distributions as tfd
+tf.config.experimental.set_visible_devices([], "GPU")
+
 import wandb
 from jaxtyping import PyTree
 from tensorflow_probability.substrates import jax as tfp

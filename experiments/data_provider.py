@@ -372,6 +372,9 @@ def _prepare_spot_datasets(
     x, u, y = dataset_pre
 
     # apply action delay
+    assert skip_first_n >= max(
+        action_delay_base, action_delay_ee
+    ), "skip_first_n must be at least as large as the action delay so we dont have zeros in the beginning"
     u_base, u_ee = u[:, :3], u[:, 3:]
     if action_delay_base > 0:
         u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])

@@ -64,7 +64,7 @@ OUPUTSCALE_SPOT = [
     0.01,  # ee_vx, ee_vy, ee_vz
 ]
 
-# OUPUTSCALE_SPOT = None
+OUPUTSCALE_SPOT = None
 
 
 def regression_experiment(
@@ -76,7 +76,13 @@ def regression_experiment(
     # logging parameters
     use_wandb: bool = False,
     # standard BNN parameters
-    model: str = "BNN_SVGD",
+    models: List[str] = [
+        "BNN_SVGD",
+        "BNN_FSVGD",
+        "BNN_FSVGD_SimPrior_GP",
+        # "GreyBox",
+        "sim_only",
+    ],
     model_seed: int = 892616,
     likelihood_std: Union[List[float], float] = 0.1,
     data_batch_size: int = 8,
@@ -111,18 +117,7 @@ def regression_experiment(
     num_distill_steps: int = 500000,
 ):
     """----------------------------- EXTRA EVALUATION -----------------------------"""
-    model = None
-    model_names = [
-        "BNN_SVGD",
-        "BNN_FSVGD",
-        "BNN_FSVGD_SimPrior_GP",
-        # "GreyBox",
-        "sim_only",
-    ]
-    eval_metrics_all = []
-    save_folder = (
-        "/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/tmp/test_4/"
-    )
+    eval_metrics_all = {}
 
     import matplotlib.pyplot as plt
     import numpy as np
@@ -139,7 +134,7 @@ def regression_experiment(
         testing_x_pre_org, testing_u_pre_org, testing_y_org = pickle.load(f)
 
     # cut data
-    start_idx = 4
+    start_idx = 20
     steps = len(testing_x_pre_org) - start_idx
     testing_x_pre = testing_x_pre_org[start_idx : start_idx + steps]
     testing_u_pre = testing_u_pre_org[start_idx : start_idx + steps]
@@ -151,19 +146,21 @@ def regression_experiment(
     u_base_org, u_ee_org = testing_u_pre_org[:, :3], testing_u_pre_org[:, 3:]
     u_base, u_ee = testing_u_pre[:, :3], testing_u_pre[:, 3:]
     if action_delay_base > 0:
-        if start_idx > action_delay_base:
-            u_delayed_start = u_base_org[start_idx - action_delay_base : start_idx]
-        else:
-            u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])
-        u_delayed_base = jnp.concatenate([u_delayed_start, u_base[:-action_delay_base]])
+        assert (
+            start_idx > action_delay_base
+        ), "start_idx must be greater than action_delay"
+        u_delayed_start_base = u_base_org[start_idx - action_delay_base : start_idx]
+        u_delayed_base = jnp.concatenate(
+            [u_delayed_start_base, u_base[:-action_delay_base]]
+        )
         assert u_delayed_base.shape == u_base.shape, "Base action delay failed"
         u_base = u_delayed_base
     if action_delay_ee > 0:
-        if start_idx > action_delay_ee:
-            u_delayed_start = u_ee_org[start_idx - action_delay_ee : start_idx]
-        else:
-            u_delayed_start = jnp.zeros_like(u_ee[:action_delay_ee])
-        u_delayed_ee = jnp.concatenate([u_delayed_start, u_ee[:-action_delay_ee]])
+        assert (
+            start_idx > action_delay_ee
+        ), "start_idx must be greater than action_delay"
+        u_delayed_start_ee = u_ee_org[start_idx - action_delay_ee : start_idx]
+        u_delayed_ee = jnp.concatenate([u_delayed_start_ee, u_ee[:-action_delay_ee]])
         assert u_delayed_ee.shape == u_ee.shape, "EE action delay failed"
         u_ee = u_delayed_ee
     testing_u_pre = jnp.concatenate([u_base, u_ee], axis=1)
@@ -220,7 +217,7 @@ def regression_experiment(
     axs_base_error[2, 1].set_title("Max base theta error")
     axs_base_error[3, 1].set_title("Total cumulative base theta error")
 
-    for model_name in model_names:
+    for model_name in models:
         model = model_name
         num_train_steps = min(
             num_epochs * num_samples_train // data_batch_size + min_train_steps,
@@ -491,7 +488,7 @@ def regression_experiment(
         axs_base_error[0, 1].plot(base_theta_error_running, label=f"{model_name}")
         axs_base_error[1, 1].plot(base_theta_error_cumulative, label=f"{model_name}")
 
-        eval_metrics_all.append(eval_metrics)
+        eval_metrics_all[model_name] = eval_metrics
 
     # plot max and total errors
     axs_ee_error[2].barh(
@@ -526,10 +523,14 @@ def regression_experiment(
 
     plt.show()
 
-    os.makedirs(save_folder, exist_ok=True)
-    fig.savefig(f"{save_folder}/simulated_trajectory.png")
-    fig_ee_error.savefig(f"{save_folder}/ee_error.png")
-    fig_base_error.savefig(f"{save_folder}/base_error.png")
+    if use_wandb:
+        wandb.log(
+            {
+                "simulated_trajectory": wandb.Image(fig),
+                "ee_error": wandb.Image(fig_ee_error),
+                "base_error": wandb.Image(fig_base_error),
+            }
+        )
 
     return eval_metrics_all
 
@@ -578,47 +579,52 @@ def main(args):
         [exp_params_no_seeds.pop(k) for k in ["model_seed", "data_seed"]]
         exp_hash_no_seeds = hash_dict(exp_params_no_seeds)
 
+        models_as_str = "_".join(exp_params["models"])
         wandb.init(
-            project="sim_transfer",
+            project="spot_sim_transfer",
             config=exp_params,
-            name=f"{exp_name}/{args.data_source}/{args.model}/{exp_hash}",
-            group=f"{exp_name}/{args.data_source}/{args.model}/{exp_hash_no_seeds}",
+            name=f"{exp_name}/{args.data_source}/{models_as_str}/{exp_hash}",
+            group=f"{exp_name}/{args.data_source}/{models_as_str}/{exp_hash_no_seeds}",
         )
 
     eval_metrics_all = regression_experiment(**exp_params, use_wandb=use_wandb)
 
     t_end = time.time()
 
-    for eval_metrics in eval_metrics_all:
+    for model_name, eval_metrics in eval_metrics_all.items():
         if use_wandb:
-            for key, val in eval_metrics.items():
-                wandb.summary[key] = float(val)
-            wandb.log({f"final_{key}": float(val) for key, val in eval_metrics.items()})
+            if eval_metrics is not None:
+                for key, val in eval_metrics.items():
+                    wandb.log({f"{key}": float(val), "model": model_name}, commit=False)
+                wandb.log({})
 
-        """ Save experiment results and configuration """
-        results_dict = {
+    """ Save experiment results and configuration """
+    results_dict = {}
+    for model_name, eval_metrics in eval_metrics_all.items():
+        results_dict[model_name] = {
             "evals": eval_metrics,
             "params": exp_params,
             "duration_total": t_end - t_start,
         }
 
-        if exp_result_folder is None:
-            from pprint import pprint
+    if exp_result_folder is None:
+        from pprint import pprint
 
-            pprint(results_dict)
-        else:
-            exp_result_file = os.path.join(exp_result_folder, f"{exp_hash}.json")
-            with open(exp_result_file, "w") as f:
-                json.dump(results_dict, f, indent=4, cls=NumpyArrayEncoder)
-            print(f"Dumped results to {exp_result_file}")
+        pprint(results_dict)
+    else:
+        exp_result_file = os.path.join(exp_result_folder, f"{exp_hash}.json")
+        with open(exp_result_file, "w") as f:
+            json.dump(results_dict, f, indent=4, cls=NumpyArrayEncoder)
+        print(f"Dumped results to {exp_result_file}")
 
-        if use_wandb:
-            wandb.finish()
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":
     current_date = datetime.datetime.now().strftime("%b%d").lower()
     parser = argparse.ArgumentParser(description="Meta-BO run")
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
     # general args
     parser.add_argument("--exp_result_folder", type=str, default=None)
@@ -632,16 +638,26 @@ if __name__ == "__main__":
     parser.add_argument("--data_seed", type=int, default=77698)
 
     # standard BNN parameters
-    parser.add_argument("--model", type=str, default="BNN_FSVGD_SimPrior_GP")
+    parser.add_argument(
+        "--models",
+        type=List[str],
+        default=[
+            "BNN_SVGD",
+            "BNN_FSVGD",
+            "BNN_FSVGD_SimPrior_GP",
+            "GreyBox",
+            "sim_only",
+        ],
+    )
     parser.add_argument("--model_seed", type=int, default=892617)
     parser.add_argument("--likelihood_std", type=float, default=None)
     parser.add_argument("--learn_likelihood_std", type=int, default=1)
     parser.add_argument("--likelihood_reg", type=float, default=0.0)
     parser.add_argument("--data_batch_size", type=int, default=8)
-    parser.add_argument("--min_train_steps", type=int, default=10_000)
+    parser.add_argument("--min_train_steps", type=int, default=40_000)
     parser.add_argument("--num_epochs", type=int, default=60)
     parser.add_argument("--max_train_steps", type=int, default=100_000)
-    parser.add_argument("--num_sim_model_train_steps", type=int, default=900_000)
+    parser.add_argument("--num_sim_model_train_steps", type=int, default=5_000)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden_activation", type=str, default="leaky_relu")
     parser.add_argument("--num_layers", type=int, default=3)
@@ -662,7 +678,7 @@ if __name__ == "__main__":
     # FSVGD_SimPrior parameters
     parser.add_argument("--bandwidth_score_estim", type=float, default=None)
     parser.add_argument("--ssge_kernel_type", type=str, default="IMQ")
-    parser.add_argument("--num_f_samples", type=int, default=128)
+    parser.add_argument("--num_f_samples", type=int, default=1024)
     parser.add_argument("--switch_score_estimator_frac", type=float, default=0.75)
 
     # Additive SimPrior GP parameters

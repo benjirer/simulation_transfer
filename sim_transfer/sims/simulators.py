@@ -752,7 +752,7 @@ class PendulumBiModalSim(PendulumSim):
                                                    upper_bound=self._upper_bound_params2)
 
         # concatenate the samples
-        params = jax.tree_map(lambda x, y: jnp.concatenate([x, y], axis=-1), params1, params2)
+        params = jax.tree_util.tree_map(lambda x, y: jnp.concatenate([x, y], axis=-1), params1, params2)
 
         def batched_fun(z, params):
             x, u = self._split_state_action(z)

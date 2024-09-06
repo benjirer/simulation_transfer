@@ -38,11 +38,8 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
     max_steps: int = 200
     _dt: float = 1 / 10.0
     dim_action: Tuple[int] = (6,)
-    _goal: jnp.array = jnp.array(
-        [0.0, 0.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 0.5, 0.02, 0.5, 0.0, 0.0, 0.0]
-    )
     _init_pose: jnp.array = jnp.array(
-        [0.0, 0.0, jnp.pi, 0.0, 0.0, 0.0, 0.914, 0.05, 0.7, 0.0, 0.0, 0.0]
+        [0.0, 0.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 0.914, 0.05, 0.7, 0.0, 0.0, 0.0]
     )
     _angle_idx: int = 2
     _obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD
@@ -132,6 +129,7 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
     ) -> Tuple[Distribution, SpotDynamicsParams]:
         assert u.shape == (self.u_dim,) and x.shape == (self.x_dim,)
 
+        print(self.action_delay)
         action_buffer = dynamics_params.action_buffer
         if self.action_delay > 0.0:
             # pushes action to action buffer and pops the oldest action
@@ -180,7 +178,7 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
             [0.005, 0.005, 0.02]
         ) * jr.normal(key_base_vel, shape=(3,))
         init_ee_pos = self._init_pose[6:9] + jr.uniform(
-            key_base_pos, (3,), minval=-0.05, maxval=0.05
+            key_ee_pos, (3,), minval=-0.05, maxval=0.05
         )
         init_ee_vel = self._init_pose[9:] + jnp.array([0.005, 0.005, 0.02]) * jr.normal(
             key_ee_vel, shape=(3,)
@@ -199,7 +197,7 @@ class SpotRewardParams:
 
 class SpotReward(Reward[SpotRewardParams]):
     _goal: jnp.array = jnp.array(
-        [0.0, 0.0, -jnp.pi, 0.0, 0.0, 0.0, 0.5, 0.02, 0.5, 0.0, 0.0, 0.0]
+        [1.0, 1.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 1.914, 1.05, 0.6, 0.0, 0.0, 0.0]
     )
 
     def __init__(

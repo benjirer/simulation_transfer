@@ -52,7 +52,7 @@ class RngKeyMixin:
 """ Stats aggregation """
 
 def aggregate_stats(stats_list: List[Dict]) -> Dict:
-    return jax.tree_map(jnp.mean, tree_stack(stats_list))
+    return jax.tree_util.tree_map(jnp.mean, tree_stack(stats_list))
 
 """ Root finding """
 

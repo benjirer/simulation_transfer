@@ -151,10 +151,16 @@ def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, p
         n_rows = traj.shape[-1]
         n_cols = 2 if actions is not None else 1
 
+        if n_rows == 13 and not encode_angle:
+            n_rows = 12
+            traj = decode_angles(traj, 2)
+            state_labels = ['base_x', 'base_y', 'base_theta', 'base_vx', 'base_vy', 'base_vtheta', 'ee_x', 'ee_y', 'ee_z', 'ee_vx', 'ee_vy', 'ee_vz']
+        else:
+            state_labels = ['base_x', 'base_y', 'base_theta_sin', 'base_theta_cos', 'base_vx', 'base_vy', 'base_vtheta', 'ee_x', 'ee_y', 'ee_z', 'ee_vx', 'ee_vy', 'ee_vz']
+
         fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(scale_factor * 8, scale_factor * 10))
         fig.tight_layout(pad=2.0)
 
-        state_labels = ['base_x', 'base_y', 'base_theta', 'base_vx', 'base_vy', 'base_vtheta', 'ee_x', 'ee_y', 'ee_z', 'ee_vx', 'ee_vy', 'ee_vz']
         action_labels = ['base_vx_action', 'base_vy_action', 'base_vtheta_action', 'ee_vx_action', 'ee_vy_action', 'ee_vz_action'] 
 
         traj_min = jnp.min(traj)
@@ -174,6 +180,7 @@ def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, p
             action_min = jnp.min(actions)
             action_max = jnp.max(actions)
             action_y_range = (action_min, action_max)
+            idx_shift = 1 if n_rows == 12 else 2
 
             axes[3][1].plot(actions[:, 0])
             axes[3][1].set_ylabel(action_labels[0])
@@ -190,21 +197,21 @@ def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, p
             axes[5][1].set_title(action_labels[2])
             axes[5][1].set_ylim(action_y_range)
 
-            axes[9][1].plot(actions[:, 3])
-            axes[9][1].set_ylabel(action_labels[3])
-            axes[9][1].set_title(action_labels[3])
-            axes[9][1].set_ylim(action_y_range)
+            axes[9 + idx_shift][1].plot(actions[:, 3])
+            axes[9 + idx_shift][1].set_ylabel(action_labels[3])
+            axes[9 + idx_shift][1].set_title(action_labels[3])
+            axes[9 + idx_shift][1].set_ylim(action_y_range)
 
-            axes[10][1].plot(actions[:, 4])
-            axes[10][1].set_ylabel(action_labels[4])
-            axes[10][1].set_title(action_labels[4])
-            axes[10][1].set_ylim(action_y_range)
+            axes[10 + idx_shift][1].plot(actions[:, 4])
+            axes[10 + idx_shift][1].set_ylabel(action_labels[4])
+            axes[10 + idx_shift][1].set_title(action_labels[4])
+            axes[10 + idx_shift][1].set_ylim(action_y_range)
 
-            axes[11][1].plot(actions[:, 5])
-            axes[11][1].set_xlabel('time')
-            axes[11][1].set_ylabel(action_labels[5])
-            axes[11][1].set_title(action_labels[5])
-            axes[11][1].set_ylim(action_y_range)
+            axes[11 + idx_shift][1].plot(actions[:, 5])
+            axes[11 + idx_shift][1].set_xlabel('time')
+            axes[11 + idx_shift][1].set_ylabel(action_labels[5])
+            axes[11 + idx_shift][1].set_title(action_labels[5])
+            axes[11 + idx_shift][1].set_ylim(action_y_range)
 
             # hide unused action subplots
             axes[0][1].axis('off')
@@ -214,8 +221,12 @@ def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, p
             axes[6][1].axis('off')
             axes[7][1].axis('off')
             axes[8][1].axis('off')
-
+        return fig, axes
     else:
+
+        if traj.shape[-1] == 13:
+            traj = decode_angles(traj, 2)
+            assert traj.shape[-1] == 12, f"Expected 12 states, got {traj.shape[-1]} states"
 
         state_label_dict = {
             0: 'base_x',
@@ -244,7 +255,8 @@ def plot_spot_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, p
 
             if i == n_rows - 1:
                 axes[i].set_xlabel('time')
-    plt.show()
+
+        return fig, axes
 
 
 
