@@ -49,19 +49,19 @@ ACTIVATION_DICT = {
 # ]
 
 OUPUTSCALE_SPOT = [
-    1.0,
-    1.0,  # base_x, base_y
-    0.01,
-    0.01,  # base_theta_sin, base_theta_cos
-    1.0,
-    1.0,
-    0.01,  # base_vel_x, base_vel_y, base_ang_vel
-    1.0,
-    1.0,
-    0.01,  # ee_x, ee_y, ee_z
-    1.0,
-    1.0,
-    0.01,  # ee_vx, ee_vy, ee_vz
+    1.0,  # base_x
+    1.0,  # base_y
+    0.01,  # base_theta_sin
+    0.01,  # base_theta_cos
+    1.0,  # base_vel_x
+    1.0,  # base_vel_y
+    0.01,  # base_ang_vel
+    1.0,  # ee_x
+    1.0,  # ee_y
+    0.01,  # ee_z
+    1.0,  # ee_vx
+    1.0,  # ee_vy
+    0.01,  # ee_vz
 ]
 
 OUPUTSCALE_SPOT = None
@@ -80,7 +80,7 @@ def regression_experiment(
         "BNN_SVGD",
         "BNN_FSVGD",
         "BNN_FSVGD_SimPrior_GP",
-        # "GreyBox",
+        "GreyBox",
         "sim_only",
     ],
     model_seed: int = 892616,
@@ -128,7 +128,9 @@ def regression_experiment(
 
     # load measured data for testing
     # file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/test_data_spot/dataset_learn_jax_test20240830-112105_v1_2.pickle"
-    file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/test_data_spot/dataset_learn_jax_test20240904-153813_v3_1.pickle"
+    # file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/test_data_spot/dataset_learn_jax_test20240904-153813_v3_1.pickle"
+    # file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/testing/dataset_learn_jax_test20240906-171355_vonly_arm.pickle"
+    file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/testing/dataset_learn_jax_test20240906-171626_vonly_base_linear.pickle"
 
     with open(file_path, "rb") as f:
         testing_x_pre_org, testing_u_pre_org, testing_y_org = pickle.load(f)
@@ -143,27 +145,15 @@ def regression_experiment(
     # apply action delay
     action_delay_base = 2
     action_delay_ee = 1
-    u_base_org, u_ee_org = testing_u_pre_org[:, :3], testing_u_pre_org[:, 3:]
-    u_base, u_ee = testing_u_pre[:, :3], testing_u_pre[:, 3:]
-    if action_delay_base > 0:
-        assert (
-            start_idx > action_delay_base
-        ), "start_idx must be greater than action_delay"
-        u_delayed_start_base = u_base_org[start_idx - action_delay_base : start_idx]
-        u_delayed_base = jnp.concatenate(
-            [u_delayed_start_base, u_base[:-action_delay_base]]
-        )
-        assert u_delayed_base.shape == u_base.shape, "Base action delay failed"
-        u_base = u_delayed_base
-    if action_delay_ee > 0:
-        assert (
-            start_idx > action_delay_ee
-        ), "start_idx must be greater than action_delay"
-        u_delayed_start_ee = u_ee_org[start_idx - action_delay_ee : start_idx]
-        u_delayed_ee = jnp.concatenate([u_delayed_start_ee, u_ee[:-action_delay_ee]])
-        assert u_delayed_ee.shape == u_ee.shape, "EE action delay failed"
-        u_ee = u_delayed_ee
-    testing_u_pre = jnp.concatenate([u_base, u_ee], axis=1)
+    action_stacking = True if data_source == "spot_real_actionstack" else False
+    from sim_transfer.sims.util import delay_and_stack_spot_actions
+
+    testing_u_pre = delay_and_stack_spot_actions(
+        testing_u_pre,
+        action_stacking,
+        action_delay_base,
+        action_delay_ee,
+    )
 
     # prepare data
     testing_x_pre = encode_angles_fn(testing_x_pre, 2)
@@ -624,17 +614,17 @@ def main(args):
 if __name__ == "__main__":
     current_date = datetime.datetime.now().strftime("%b%d").lower()
     parser = argparse.ArgumentParser(description="Meta-BO run")
-    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
     # general args
     parser.add_argument("--exp_result_folder", type=str, default=None)
     parser.add_argument("--exp_name", type=str, default=f"test_{current_date}")
-    parser.add_argument("--use_wandb", type=bool, default=False)
+    parser.add_argument("--use_wandb", type=bool, default=True)
 
     # data parameters
     parser.add_argument("--data_source", type=str, default="spot_real")
     parser.add_argument("--pred_diff", type=int, default=0)
-    parser.add_argument("--num_samples_train", type=int, default=4000)
+    parser.add_argument("--num_samples_train", type=int, default=4_000)
     parser.add_argument("--data_seed", type=int, default=77698)
 
     # standard BNN parameters
@@ -645,7 +635,7 @@ if __name__ == "__main__":
             "BNN_SVGD",
             "BNN_FSVGD",
             "BNN_FSVGD_SimPrior_GP",
-            "GreyBox",
+            # "GreyBox",
             "sim_only",
         ],
     )
@@ -654,7 +644,7 @@ if __name__ == "__main__":
     parser.add_argument("--learn_likelihood_std", type=int, default=1)
     parser.add_argument("--likelihood_reg", type=float, default=0.0)
     parser.add_argument("--data_batch_size", type=int, default=8)
-    parser.add_argument("--min_train_steps", type=int, default=40_000)
+    parser.add_argument("--min_train_steps", type=int, default=100_000)
     parser.add_argument("--num_epochs", type=int, default=60)
     parser.add_argument("--max_train_steps", type=int, default=100_000)
     parser.add_argument("--num_sim_model_train_steps", type=int, default=5_000)

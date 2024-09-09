@@ -13,6 +13,9 @@ from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
 from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
 from sim_transfer.sims.simulators import StackedActionSimWrapper
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
+from sim_transfer.sims.util import (
+    delay_and_stack_spot_actions as delay_and_stack_spot_actions_fn,
+)
 
 DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
@@ -58,7 +61,7 @@ DEFAULTS_SPOT = {
     "param_mode": "random",
 }
 
-DEFAULTS_SPOT_REAL = {"sampling": "consecutive", "num_samples_test": 100}
+DEFAULTS_SPOT_REAL = {"sampling": "consecutive", "num_samples_test": 1000}
 
 _RACECAR_NOISE_STD_ENCODED = 20 * jnp.concatenate(
     [
@@ -148,6 +151,10 @@ DATASET_CONFIGS = {
         "num_samples_train": {"value": 100},
     },
     "spot_real": {
+        "likelihood_std": {"value": _SPOT_NOISE_STD_ENCODED.tolist()},
+        "num_samples_train": {"value": 100},
+    },
+    "spot_real_actionstack": {
         "likelihood_std": {"value": _SPOT_NOISE_STD_ENCODED.tolist()},
         "num_samples_train": {"value": 100},
     },
@@ -362,37 +369,20 @@ def _prepare_spot_datasets(
     skip_first_n: int = 30,
     action_delay_base: int = 2,
     action_delay_ee: int = 1,
+    action_stacking: bool = False,
     angle_idx: int = 2,
 ):
-    assert (
-        action_delay_base >= 0 and action_delay_ee >= 0
-    ), "Action delay must be non-negative"
-
     # unpack dataset
     x, u, y = dataset_pre
 
-    # apply action delay
-    assert skip_first_n >= max(
-        action_delay_base, action_delay_ee
-    ), "skip_first_n must be at least as large as the action delay so we dont have zeros in the beginning"
-    u_base, u_ee = u[:, :3], u[:, 3:]
-    if action_delay_base > 0:
-        u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])
-        u_delayed_base = jnp.concatenate([u_delayed_start, u_base[:-action_delay_base]])
-        assert (
-            u_delayed_base.shape == u_base.shape
-        ), "Something went wrong with the base action delay"
-        u_base = u_delayed_base
-
-    if action_delay_ee > 0:
-        u_delayed_start = jnp.zeros_like(u_ee[:action_delay_ee])
-        u_delayed_ee = jnp.concatenate([u_delayed_start, u_ee[:-action_delay_ee]])
-        assert (
-            u_delayed_ee.shape == u_ee.shape
-        ), "Something went wrong with the ee action delay"
-        u_ee = u_delayed_ee
-
-    u = jnp.concatenate([u_base, u_ee], axis=-1)
+    # action stacking and action delay
+    # note: we can can't split action delay if we use action stacking
+    u = delay_and_stack_spot_actions_fn(
+        u=u,
+        action_stacking=action_stacking,
+        action_delay_base=action_delay_base,
+        action_delay_ee=action_delay_ee,
+    )
 
     # project theta into [-\pi, \pi] and encode angles
     x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
@@ -410,7 +400,13 @@ def _prepare_spot_datasets(
 
     # check shapes
     assert x_data.shape[0] == y_data.shape[0]
-    assert x_data.shape[1] - 6 == y_data.shape[1]  # - 6 since action is 6D
+    if action_stacking:
+        assert (
+            x_data.shape[1] - 6 * (max(action_delay_base, action_delay_ee) + 1)
+            == y_data.shape[1]
+        )
+    else:
+        assert x_data.shape[1] - 6 == y_data.shape[1]
 
     return x_data, y_data
 
@@ -418,12 +414,14 @@ def _prepare_spot_datasets(
 def get_spot_recorded_data(
     encode_angle: bool = True,
     skip_first_n_points: int = 30,
-    dataset: str = "all",
     action_delay_base: int = 2,
     action_delay_ee: int = 1,
+    action_stacking: bool = False,
+    num_test_points: int = 1000,
     angle_idx: int = 2,
 ):
     recordings_dirs = [
+        os.path.join(DATA_DIR, "recordings_spot_v0"),
         os.path.join(DATA_DIR, "recordings_spot_v1"),
         os.path.join(DATA_DIR, "recordings_spot_v2"),
         os.path.join(DATA_DIR, "recordings_spot_v3"),
@@ -446,6 +444,7 @@ def get_spot_recorded_data(
         skip_first_n=skip_first_n_points,
         action_delay_base=action_delay_base,
         action_delay_ee=action_delay_ee,
+        action_stacking=action_stacking,
         angle_idx=angle_idx,
     )
     x, y = map(lambda x: jnp.concatenate(x, axis=0), zip(*map(prep_fn, datasets_pre)))
@@ -456,7 +455,6 @@ def get_spot_recorded_data(
     x, y = x[indices], y[indices]
 
     # split into train and test
-    num_test_points = 1000
     x_train, y_train, x_test, y_test = (
         x[:-num_test_points],
         y[:-num_test_points],
@@ -834,66 +832,80 @@ def provide_data_and_sim(
         from sim_transfer.sims.simulators import SpotSim
 
         defaults = DEFAULTS_SPOT
+
+        # get data and sim
         if data_source == "spot_real":
-            sim_hf = sim_lf = SpotSim(encode_angle=True)
+            sim = SpotSim(encode_angle=True)
             print("[data_provider] Using real Spot data")
             x_train, y_train, x_test, y_test = get_spot_recorded_data(encode_angle=True)
-
-            num_train_available = x_train.shape[0]
-            num_test_available = x_test.shape[0]
-
-            num_train = data_spec["num_samples_train"]
-            num_test = data_spec.get(
-                "num_samples_test", DEFAULTS_SPOT_REAL["num_samples_test"]
+        elif data_source == "spot_real_actionstack":
+            sim = SpotSim(encode_angle=True)
+            num_stacked_actions = data_spec.get("num_stacked_actions", 2)
+            sim = StackedActionSimWrapper(
+                sim, num_stacked_actions=num_stacked_actions, action_size=6
             )
-            assert (
-                num_train <= num_train_available and num_test <= num_test_available
-            ), f"{num_train} > {num_train_available} or {num_test} > {num_test_available}"
-            sampling_scheme = data_spec.get("sampling", DEFAULTS_SPOT_REAL["sampling"])
-            if sampling_scheme == "iid":
-                # sample random subset (datapoints are not adjacent in time)
-                import warnings
-
-                if num_train > num_train_available / 4.0:
-                    warnings.warn(
-                        f"Not enough data for {num_train} iid samples."
-                        f"Requires at lest 4 times as much data as requested "
-                        f"iid samples."
-                    )
-                idx_train = jax.random.choice(
-                    key_train,
-                    jnp.arange(num_train_available),
-                    shape=(num_train,),
-                    replace=False,
-                )
-                idx_test = jax.random.choice(
-                    key_test,
-                    jnp.arange(num_test_available),
-                    shape=(num_test,),
-                    replace=False,
-                )
-            elif sampling_scheme == "consecutive":
-                # sample random sub-trajectory (datapoints are adjacent in time -> highly correlated)
-                offset_train = jax.random.choice(
-                    key_train, jnp.arange(num_train_available - num_train)
-                )
-                offset_test = jax.random.choice(
-                    key_test, jnp.arange(num_test_available - num_test + 1)
-                )
-                idx_train = jnp.arange(num_train) + offset_train
-                idx_test = jnp.arange(num_test) + offset_test
-            else:
-                raise ValueError(
-                    f'Unknown sampling scheme {sampling_scheme}. Needs to be one of ["iid", "consecutive"].'
-                )
-
-            x_train, y_train, x_test, y_test = (
-                x_train[idx_train],
-                y_train[idx_train],
-                x_test[idx_test],
-                y_test[idx_test],
+            print("[data_provider] Using real Spot data with action stacking")
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True, action_stacking=True
             )
-            return x_train, y_train, x_test, y_test, sim_lf
+        else:
+            raise ValueError(f"Unknown spot data source {data_source}")
+
+        # sample data
+        num_train_available = x_train.shape[0]
+        num_test_available = x_test.shape[0]
+        num_train = data_spec["num_samples_train"]
+        num_test = data_spec.get(
+            "num_samples_test", DEFAULTS_SPOT_REAL["num_samples_test"]
+        )
+        assert (
+            num_train <= num_train_available and num_test <= num_test_available
+        ), f"{num_train} > {num_train_available} or {num_test} > {num_test_available}"
+        sampling_scheme = data_spec.get("sampling", DEFAULTS_SPOT_REAL["sampling"])
+        if sampling_scheme == "iid":
+            # sample random subset (datapoints are not adjacent in time)
+            import warnings
+
+            if num_train > num_train_available / 4.0:
+                warnings.warn(
+                    f"Not enough data for {num_train} iid samples."
+                    f"Requires at lest 4 times as much data as requested "
+                    f"iid samples."
+                )
+            idx_train = jax.random.choice(
+                key_train,
+                jnp.arange(num_train_available),
+                shape=(num_train,),
+                replace=False,
+            )
+            idx_test = jax.random.choice(
+                key_test,
+                jnp.arange(num_test_available),
+                shape=(num_test,),
+                replace=False,
+            )
+        elif sampling_scheme == "consecutive":
+            # sample random sub-trajectory (datapoints are adjacent in time -> highly correlated)
+            offset_train = jax.random.choice(
+                key_train, jnp.arange(num_train_available - num_train)
+            )
+            offset_test = jax.random.choice(
+                key_test, jnp.arange(num_test_available - num_test + 1)
+            )
+            idx_train = jnp.arange(num_train) + offset_train
+            idx_test = jnp.arange(num_test) + offset_test
+        else:
+            raise ValueError(
+                f'Unknown sampling scheme {sampling_scheme}. Needs to be one of ["iid", "consecutive"].'
+            )
+
+        x_train, y_train, x_test, y_test = (
+            x_train[idx_train],
+            y_train[idx_train],
+            x_test[idx_test],
+            y_test[idx_test],
+        )
+        return x_train, y_train, x_test, y_test, sim
 
     else:
         raise ValueError("Unknown data source %s" % data_source)
@@ -919,7 +931,8 @@ if __name__ == "__main__":
 
     # test spot data
     x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real", data_spec={"num_samples_train": 400}
+        data_source="spot_real_actionstack",
+        data_spec={"num_samples_train": 400, "num_samples_test": 50},
     )
     print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
 

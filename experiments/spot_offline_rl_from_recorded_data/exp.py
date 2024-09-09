@@ -357,7 +357,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_seed", type=int, default=0)
     parser.add_argument("--data_seed", type=int, default=0)
-    parser.add_argument("--horizon_len", type=int, default=500)
+    parser.add_argument("--horizon_len", type=int, default=50)
     parser.add_argument("--sac_num_env_steps", type=int, default=50_000)
     parser.add_argument("--project_name", type=str, default="SpotTestExperiments")
     parser.add_argument("--learnable_likelihood_std", type=str, default="yes")

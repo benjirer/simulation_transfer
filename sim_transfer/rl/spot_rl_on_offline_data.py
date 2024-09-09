@@ -22,6 +22,7 @@ from sim_transfer.rl.model_based_rl.learned_system import LearnedSpotSystem
 from sim_transfer.sims.envs import SpotSimEnv
 from sim_transfer.sims.util import plot_spot_trajectory
 
+
 class RLFromOfflineData:
     def __init__(
         self,
@@ -633,7 +634,7 @@ if __name__ == "__main__":
     x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
         data_source="spot_real",
         data_spec={
-            "num_samples_train": 4_000,
+            "num_samples_train": 300,
         },
         data_seed=1234,
     )
