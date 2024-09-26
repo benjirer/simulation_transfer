@@ -1,5 +1,5 @@
 import time
-from functools import partial
+from functools import partial, reduce
 from typing import Dict, Any, Tuple, Optional
 
 import jax
@@ -17,9 +17,11 @@ from sim_transfer.sims.util import (
     decode_angles,
     plot_rc_trajectory,
     plot_spot_trajectory,
+    sample_pos_and_goal_spot,
 )
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
 from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
+from sim_transfer.sims.simulators import SpotSim
 
 
 class RCCarEnvReward:
@@ -306,50 +308,56 @@ class SpotEnvReward:
 
     def __init__(
         self,
-        goal: jnp.array,
         encode_angle: bool = False,
         ctrl_cost_weight: float = 0.005,
         bound: float = 0.1,
         margin_factor: float = 10.0,
         base_linear_action_cost_weight: float = 1.0,
-        base_theta_action_cost_weight: float = 1.0,
-        ee_action_cost_weight: float = 1.0,
-        only_ee_goal: bool = False,
+        base_theta_action_cost_weight: float = 0.8,
+        ee_action_cost_weight: float = 0.5,
+        only_ee_goal: bool = True,
+        dim_goal: int = 3,
     ):
-        self.goal = goal
         self.ctrl_cost_weight = ctrl_cost_weight
         self.base_linear_action_cost_weight = base_linear_action_cost_weight
         self.base_theta_action_cost_weight = base_theta_action_cost_weight
-        if only_ee_goal:
-            assert (
-                self.goal.shape[-1] == 3
-            ), "Goal must be of shape (3,) if only ee goal is True"
         self.only_ee_goal = only_ee_goal
         self.ee_action_cost_weight = ee_action_cost_weight
         self.encode_angle = encode_angle
+        self.dim_goal = dim_goal
         self.tolerance_reward = ToleranceReward(
             bounds=(0.0, bound),
             margin=margin_factor * bound,
             value_at_margin=0.1,
             sigmoid="long_tail",
         )
+        self.tolerance_reward_distance = ToleranceReward(
+            bounds=(0.0, 1.3),
+            margin=1.0 * 1.3,
+            value_at_margin=0.1,
+            sigmoid="long_tail",
+        )
 
     def forward(self, obs: jnp.array, action: jnp.array, next_obs: jnp.array):
         """Computes the reward for the given transition"""
+        goal = next_obs[..., -self.dim_goal :]
+        assert (
+            goal.shape[-1] == self.dim_goal
+        ), f"Goal shape {goal.shape} must be {self.dim_goal}"
+
         reward_ctrl_base_linear, reward_ctrl_base_theta, reward_ctrl_ee = (
             self.action_reward(action)
         )
-        reward_state = self.state_reward(obs, next_obs)
-        reward = (
-            reward_state
-            + self.ctrl_cost_weight
-            * self.base_linear_action_cost_weight
-            * reward_ctrl_base_linear
-            + self.ctrl_cost_weight * self.ee_action_cost_weight * reward_ctrl_ee
-            + self.ctrl_cost_weight
-            * self.base_theta_action_cost_weight
-            * reward_ctrl_base_theta
+        reward_state = self.state_reward(next_obs, goal)
+
+        reward_distance = self.distance_reward(next_obs)
+
+        action_reward = (
+            self.base_linear_action_cost_weight * reward_ctrl_base_linear
+            + self.base_theta_action_cost_weight * reward_ctrl_base_theta
+            + self.ee_action_cost_weight * reward_ctrl_ee
         )
+        reward = reward_state + self.ctrl_cost_weight * action_reward
         return reward
 
     @staticmethod
@@ -360,19 +368,28 @@ class SpotEnvReward:
         ee_action_reward = -(action[3:] ** 2).sum(-1)
         return base_linear_action_reward, base_theta_action_reward, ee_action_reward
 
-    def state_reward(self, obs: jnp.array, next_obs: jnp.array) -> jnp.array:
+    def distance_reward(self, next_obs: jnp.array) -> jnp.array:
+        """Computes the reward for ee-base distance staying within constraint """
+        if self.encode_angle:
+            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+        base_pos = next_obs[..., :2]
+        base_pos = jnp.concatenate([base_pos, jnp.array([0.445])], axis=-1)
+        ee_pos = next_obs[..., 6:9] 
+        ee_base_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos - base_pos), axis=-1))
+        return self.tolerance_reward_distance(ee_base_dist)
+
+    def state_reward(self, next_obs: jnp.array, goal: jnp.array) -> jnp.array:
         """Computes the reward for the given observations"""
         if self.encode_angle:
             next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
         if self.only_ee_goal:
-            ee_pos_diff = next_obs[..., 6:9] - self.goal[:3]
-            pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-            total_dist = jnp.sqrt(pos_dist**2)
-            reward = self.tolerance_reward(total_dist)
+            ee_pos_diff = next_obs[..., 6:9] - goal
+            ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
+            reward = self.tolerance_reward(ee_pos_dist)
         else:
-            base_pos_diff = next_obs[..., :2] - self.goal[:2]
-            theta_diff = next_obs[..., 2] - self.goal[2]
-            ee_pos_diff = next_obs[..., 6:9] - self.goal[6:9]
+            base_pos_diff = next_obs[..., :2] - goal[:2]
+            theta_diff = next_obs[..., 2] - [2]
+            ee_pos_diff = next_obs[..., 6:9] - goal[6:9]
             base_pos_dist = jnp.sqrt(jnp.sum(jnp.square(base_pos_diff), axis=-1))
             theta_dist = jnp.abs(((theta_diff + jnp.pi) % (2 * jnp.pi)) - jnp.pi)
             ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
@@ -383,16 +400,12 @@ class SpotEnvReward:
 
 class SpotSimEnv:
     max_steps: int = 200
-    _dt: float = 1 / 30.0
+    _dt: float = 1 / 10.0
     dim_action: Tuple[int] = (6,)
-    _goal: jnp.array = jnp.array(
-        [1.0, 1.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 1.914, 1.05, 0.6, 0.0, 0.0, 0.0]
-    )
-    _init_pose: jnp.array = jnp.array(
-        [0.0, 0.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 0.914, 0.05, 0.7, 0.0, 0.0, 0.0]
-    )
     _angle_idx: int = 2
     _obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD
+    _domain_lower = SpotSim._domain_lower
+    _domain_upper = SpotSim._domain_upper
 
     def __init__(
         self,
@@ -404,10 +417,7 @@ class SpotSimEnv:
         margin_factor: float = 10.0,
         max_velocity: float = 1.0,
         ctrl_diff_weight: float = 0.0,
-        base_linear_action_cost_weight: float = 1.0,
-        base_theta_action_cost_weight: float = 1.0,
-        ee_action_cost_weight: float = 1.0,
-        only_ee_goal: bool = False,
+        only_ee_goal: bool = True,
         seed: int = 230492394,
         max_steps: int = 200,
     ):
@@ -453,13 +463,9 @@ class SpotSimEnv:
 
         # initialize reward model
         self._reward_model = SpotEnvReward(
-            goal=self._goal,
             ctrl_cost_weight=ctrl_cost_weight,
             encode_angle=encode_angle,
             margin_factor=margin_factor,
-            base_linear_action_cost_weight=base_linear_action_cost_weight,
-            base_theta_action_cost_weight=base_theta_action_cost_weight,
-            ee_action_cost_weight=ee_action_cost_weight,
             only_ee_goal=only_ee_goal,
         )
 
@@ -486,33 +492,19 @@ class SpotSimEnv:
     def reset(self, rng_key: Optional[jax.random.PRNGKey] = None) -> jnp.array:
         """Resets the environment to a random initial state close to the initial pose"""
         rng_key = self.rds_key if rng_key is None else rng_key
-
-        # sample random initial state
-        key_base_pos, key_theta, key_base_vel, key_ee_pos, key_ee_vel, key_obs = (
-            jax.random.split(rng_key, 6)
-        )
-        init_base_pos = self._init_pose[:2] + jax.random.uniform(
-            key_base_pos, shape=(2,), minval=-0.10, maxval=0.10
-        )
-        init_theta = self._init_pose[2:3] + jax.random.uniform(
-            key_theta, shape=(1,), minval=-0.10 * jnp.pi, maxval=0.10 * jnp.pi
-        )
-        init_base_vel = self._init_pose[3:6] + jnp.array(
-            [0.005, 0.005, 0.02]
-        ) * jax.random.normal(key_base_vel, shape=(3,))
-        init_ee_pos = self._init_pose[6:9] + jax.random.uniform(
-            key_ee_pos, shape=(3,), minval=-0.10, maxval=0.10
-        )
-        init_ee_vel = self._init_pose[9:] + jnp.array(
-            [0.005, 0.005, 0.02]
-        ) * jax.random.normal(key_ee_vel, shape=(3,))
-        init_state = jnp.concatenate(
-            [init_base_pos, init_theta, init_base_vel, init_ee_pos, init_ee_vel]
+        reset_key, key_obs = jax.random.split(rng_key, 2)
+        
+        # sample random initial state and goal
+        self._state, self._goal = sample_pos_and_goal_spot(
+            rng_key=reset_key, 
+            domain_lower=self._domain_lower, 
+            domain_upper=self._domain_upper, 
         )
 
-        self._state = init_state
         self._time = 0
-        return self._state_to_obs(self._state, rng_key=key_obs)
+        return jnp.concatenate(
+            [self._state_to_obs(self._state, rng_key=key_obs), self._goal]
+        )
 
     def step(
         self, action: jnp.array, rng_key: Optional[jax.random.PRNGKey] = None
@@ -544,23 +536,56 @@ class SpotSimEnv:
         self._state = self._next_step_fn(self._state, action)
         self._time += 1
         obs = self._state_to_obs(self._state, rng_key=rng_key)
+        obs_with_goal = jnp.concatenate([obs, self._goal])
 
         # compute reward
         reward = (
-            self._reward_model.forward(obs=None, action=action, next_obs=obs)
+            self._reward_model.forward(obs=None, action=action, next_obs=obs_with_goal)
             + jitter_reward
         )
 
         # check if done
-        # TODO: add done if outside of bounds
+        # ee_pos = obs[..., 7:10] if self.encode_angle else obs[..., 6:9]
+        # base_pos = obs[..., :2]
+
+        # # goal reached
+        # ee_distance = jnp.linalg.norm(ee_pos - self._goal)
+        # ee_goal_threshold = 0.05
+        # reached_goal = ee_distance < ee_goal_threshold
+
+        # # spot in bounds
+        # ee_out_of_bounds = jnp.logical_or(
+        #     jnp.any(ee_pos < self._domain_lower[6:9]),
+        #     jnp.any(ee_pos > self._domain_upper[6:9])
+        # )
+
+        # base_out_of_bounds = jnp.logical_or(
+        #     jnp.any(base_pos < self._domain_lower[:2]),
+        #     jnp.any(base_pos > self._domain_upper[:2])
+        # )
+
+        # # time up
+        # time_up = self._time >= self.max_steps
+
+        # done = reduce(jnp.logical_or, [
+        #     reached_goal,
+        #     ee_out_of_bounds,
+        #     base_out_of_bounds,
+        #     time_up
+        # ])
+
         done = self._time >= self.max_steps
 
         # return observation, reward, done, info
         return (
-            obs,
+            obs_with_goal,
             reward,
             done,
-            {"time": self._time, "state": self._state, "reward": reward},
+            {
+                "time": self._time,
+                "state": self._state,
+                "reward": reward,
+            },
         )
 
     def _state_to_obs(

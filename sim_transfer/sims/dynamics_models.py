@@ -222,12 +222,12 @@ class DynamicsModel(ABC):
             next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
         return next_state
 
-    def ode(self, x: jax.Array, u: jax.Array, params) -> jax.Array:
+    def ode(self, x: jax.Array, u: jax.Array, params, *args, **kwargs) -> jax.Array:
         assert x.shape[-1] == self.x_dim and u.shape[-1] == self.u_dim
-        return self._ode(x, u, params)
+        return self._ode(x, u, params, *args, **kwargs)
 
     @abstractmethod
-    def _ode(self, x: jax.Array, u: jax.Array, params) -> jax.Array:
+    def _ode(self, x: jax.Array, u: jax.Array, params, *args, **kwargs) -> jax.Array:
         pass
 
     def _split_key_like_tree(self, key: jax.random.PRNGKey):
@@ -1215,18 +1215,20 @@ class SpotDynamicsModel(DynamicsModel):
                 Make sure that dynamics model respects these constraints by:
                     Arm attachment to base: Set velocity from EE command to zero (velocities induced by base are kept - these can't make EE move outside of constraints)
                     Ground: Set z-axis velocity to zero and set z-position to limit (EE cannot move through the ground)
+                
+                Then, recall dx computation with constrained ee x,y,z velocities and set ee_constrained=0 in ode call.
                 """
                 max_distance_ee_base = jnp.array(1.3)
                 min_distance_ee_ground = jnp.array(0.05)
-                # TODO: we could add base z comp to observations and make this more exact
+                # TODO: we could add base z component to observations and make this more exact
                 base_pos = jnp.concatenate([q_pre[:2], jnp.array([0.445])])
                 ee_pos = q_pre[6:9]
 
                 # distance between base and end effector
                 def true_fun_base(q_pre):
                     # recall dx with EE vel commands set to zero
-                    u_constrained = jnp.concatenate([u[:3], jnp.zeros(2), u[5:]])
-                    dx_constrained = self.ode(q_pre, u_constrained, params)
+                    u_constrained = jnp.concatenate([u[:3], jnp.zeros(3)])
+                    dx_constrained = self.ode(q_pre, u_constrained, params, ee_constrained_dist=jnp.array(0.0))
                     q_constrained = update_q(
                         carry, dx_constrained, gamma, beta_pos, beta_vel
                     )
@@ -1378,7 +1380,7 @@ class SpotDynamicsModel(DynamicsModel):
         vy = vel_ee_from_rot * jnp.sin(alpha)
         return vx, vy
 
-    def _ode(self, x, u, params: SpotParams):
+    def _ode(self, x, u, params: SpotParams, ee_constrained_dist: jnp.array = 1.0):
         """
         Use kinematic model with weighted velocity between previous and current velocity
         Note: Need to add base velocity and rotation induced velocity to get end effector velocity in global frame
@@ -1404,18 +1406,18 @@ class SpotDynamicsModel(DynamicsModel):
             x, base_vtheta
         )
         ee_vx = (
-            params.alpha_ee_1 * x[..., 9]
+            params.alpha_ee_1 * x[..., 9] * ee_constrained_dist
             + (1 - params.alpha_ee_1) * u[..., 3]
             + ee_rotinduced_vx
             + base_vx
         )
         ee_vy = (
-            params.alpha_ee_2 * x[..., 10]
+            params.alpha_ee_2 * x[..., 10] * ee_constrained_dist
             + (1 - params.alpha_ee_2) * u[..., 4]
             + ee_rotinduced_vy
             + base_vy
         )
-        ee_vz = params.alpha_ee_3 * x[..., 11] + (1 - params.alpha_ee_3) * u[..., 5]
+        ee_vz = params.alpha_ee_3 * x[..., 11] * ee_constrained_dist + (1 - params.alpha_ee_3) * u[..., 5]
 
         # positions dx
         base_x_dot = base_vx

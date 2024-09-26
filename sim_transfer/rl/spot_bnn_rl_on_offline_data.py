@@ -24,6 +24,8 @@ from sim_transfer.sims.util import plot_spot_trajectory
 
 
 class RLFromOfflineData:
+    """Class to train a policy on offline data using BNN model and evaluate it on the simulator or model."""
+
     def __init__(
         self,
         x_train: chex.Array,
@@ -38,28 +40,35 @@ class RLFromOfflineData:
         sac_kwargs: dict = None,
         key: chex.PRNGKey = jr.PRNGKey(0),
         return_best_policy: bool = True,
-        num_frame_stack: int = 0,
         test_data_ratio: float = 0.1,
         num_init_points_to_bs_for_sac_learning: int | None = 100,
         eval_sac_only_from_init_states: bool = False,
         eval_bnn_model_on_all_offline_data: bool = True,
         train_sac_only_from_init_states: bool = False,
         load_pretrained_bnn_model: bool = False,
+        wandb_logging: bool = True,
     ):
-        self.eval_bnn_model_on_all_offline_data = eval_bnn_model_on_all_offline_data
+        # set parameters
+        self.wandb_logging = wandb_logging
         self.eval_sac_only_from_init_states = eval_sac_only_from_init_states
         self.train_sac_only_from_init_states = train_sac_only_from_init_states
         self.load_pretrained_bnn_model = load_pretrained_bnn_model
+        self.test_data_ratio = test_data_ratio
+        self.key = key
+        self.return_best_policy = return_best_policy
+        self.include_aleatoric_noise = include_aleatoric_noise
+        self.bnn_model = bnn_model
+        self.predict_difference = predict_difference
+        self.spot_reward_kwargs = spot_reward_kwargs
+        self.sac_kwargs = sac_kwargs
 
-        # We load the model trained on dataset of 20_000 points for evaluation
+        # load pretrained model for evaluation
         if self.load_pretrained_bnn_model:
             simulation_transfer_dir = os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             )
             bnn_dir = os.path.join(simulation_transfer_dir, "bnn_models_pretrained")
-            bnn_model_path = os.path.join(
-                bnn_dir, "bnn_svgd_model_on_20_000_points.pkl"
-            )
+            bnn_model_path = os.path.join(bnn_dir, "bnn_svgd_model_on_5_000_points.pkl")
 
             with open(bnn_model_path, "rb") as handle:
                 bnn_model_pretrained = pickle.load(handle)
@@ -67,61 +76,47 @@ class RLFromOfflineData:
             self.bnn_model_pretrained = bnn_model_pretrained
         else:
             self.bnn_model_pretrained = None
-        self.test_data_ratio = test_data_ratio
-        self.key = key
 
-        self.return_best_policy = return_best_policy
-        self.include_aleatoric_noise = include_aleatoric_noise
-        self.bnn_model = bnn_model
-        self.predict_difference = predict_difference
-
-        self.spot_reward_kwargs = spot_reward_kwargs
-        self.sac_kwargs = sac_kwargs
-
-        # We split the train data into train and eval
+        # split the train data into train and eval
         self.key, key_split = jr.split(self.key)
         x_train, y_train, x_eval, y_eval = self.shuffle_and_split_data(
             x_train, y_train, self.test_data_ratio, key_split
         )
 
-        # Prepare number of init points for learning
+        # prepare number of init points for learning
         if num_init_points_to_bs_for_sac_learning is None:
             num_init_points_to_bs_for_sac_learning = x_train.shape[0]
         self.num_init_points_to_bs_for_learning = num_init_points_to_bs_for_sac_learning
 
+        # set dimensions
+        # Note: raw x is built from [state (12/13), goal (3), action (6)] = 21/22
         state_dim = 13
         action_dim = 6
+        goal_dim = 3
+        state_dim_with_goal = state_dim + goal_dim
         self.state_dim = state_dim
+        self.state_dim_with_goal = state_dim_with_goal
         self.action_dim = action_dim
-        self.num_frame_stack = 0
-        # We compute number of frames to stack
-        self.state_with_frame_stack_dim = self.num_frame_stack * action_dim + state_dim
+        self.goal_dim = goal_dim
 
-        # Reshape the data and prepare it for training
-        states_obs = x_train[:, :state_dim]
+        # reshape data and prepare it for policy training
+        states_obs = x_train[:, :state_dim_with_goal]
         next_state_obs = y_train
-        last_actions = x_train[:, self.state_with_frame_stack_dim :]
-        framestacked_actions = x_train[:, state_dim : self.state_with_frame_stack_dim]
+        actions = x_train[:, self.state_dim_with_goal :]
 
-        if self.num_frame_stack > 0:
-            next_framestacked_actions = x_train[:, state_dim + action_dim :]
-        else:
-            next_framestacked_actions = framestacked_actions
-
+        # prepare transitions
         rewards = jnp.zeros(shape=(x_train.shape[0],))
         discounts = 0.99 * jnp.ones(shape=(x_train.shape[0],))
         transitions = Transition(
-            observation=jnp.concatenate([states_obs, framestacked_actions], axis=-1),
-            action=last_actions,
+            observation=jnp.concatenate([states_obs], axis=-1),
+            action=actions,
             reward=rewards,
             discount=discounts,
-            next_observation=jnp.concatenate(
-                [next_state_obs, next_framestacked_actions], axis=-1
-            ),
+            next_observation=jnp.concatenate([next_state_obs], axis=-1),
         )
 
-        # We create a dummy sample to init the buffer
-        dummy_obs = jnp.zeros(shape=(state_dim + action_dim * self.num_frame_stack,))
+        # create a dummy sample to init the buffer
+        dummy_obs = jnp.zeros(shape=(state_dim_with_goal,))
         self.dummy_sample = Transition(
             observation=dummy_obs,
             action=jnp.zeros(shape=(action_dim,)),
@@ -136,13 +131,35 @@ class RLFromOfflineData:
             sample_batch_size=1,
         )
 
-        # We init and insert the data in the true data buffer
+        # init and insert the data in the true data buffer
         self.key, key_init_buffer, key_insert_data = jr.split(self.key, 3)
         true_buffer_state = self.true_data_buffer.init(key_init_buffer)
         true_buffer_state = self.true_data_buffer.insert(true_buffer_state, transitions)
         self.true_buffer_state = true_buffer_state
 
-        # Prepare data to train the model
+        # prepare data to train the model
+        # Note: we have to remove the goal from the training data
+        x_train, u_train = x_train[:, :state_dim], x_train[:, state_dim_with_goal:]
+        x_eval, u_eval = x_eval[:, :state_dim], x_eval[:, state_dim_with_goal:]
+        x_test, u_test = x_test[:, :state_dim], x_test[:, state_dim_with_goal:]
+        x_train = jnp.concatenate([x_train, u_train], axis=-1)
+        x_eval = jnp.concatenate([x_eval, u_eval], axis=-1)
+        x_test = jnp.concatenate([x_test, u_test], axis=-1)
+        print(
+            "Data adapted for training: x_train.shape",
+            x_train.shape,
+            "x_eval.shape",
+            x_eval.shape,
+            "x_test.shape",
+            x_test.shape,
+        )
+
+        assert (
+            x_train.shape[-1] == state_dim + action_dim
+            and x_eval.shape[-1] == state_dim + action_dim
+            and x_test.shape[-1] == state_dim + action_dim
+        ), "Training data has wrong shape."
+
         self.x_train = x_train
         self.y_train = y_train
         self.x_eval = x_eval
@@ -150,6 +167,7 @@ class RLFromOfflineData:
         self.x_test = x_test
         self.y_test = y_test
 
+        # prepare data for predict_difference mode
         if self.predict_difference:
             self.y_train = self.y_train - self.x_train[..., : self.state_dim]
             self.y_eval = self.y_eval - self.x_eval[..., : self.state_dim]
@@ -157,22 +175,22 @@ class RLFromOfflineData:
 
     @staticmethod
     def shuffle_and_split_data(x_data, y_data, test_ratio, key: chex.PRNGKey):
-        # Get the size of the data
+        """Permute and split data into train and test sets."""
+        # get the size of the data
         num_data = x_data.shape[0]
 
-        # Create a permutation of indices
+        # create a permutation of indices and permute data
         perm = jr.permutation(key, num_data)
-        # Permute the data
         x_data = x_data[perm]
         y_data = y_data[perm]
 
-        # Calculate the number of examples in the test set
+        # calculate number of examples in the test set
         num_test = int(test_ratio * num_data)
 
-        # Calculate the number of examples in the train set
+        # calculate number of examples in the train set
         num_train = num_data - num_test
 
-        # Split the data
+        # split data
         x_train = x_data[:num_train]
         x_test = x_data[num_train:]
         y_train = y_data[:num_train]
@@ -183,6 +201,9 @@ class RLFromOfflineData:
     def train_model(
         self, bnn_train_steps: int, return_best_bnn: bool = True
     ) -> BNN_SVGD:
+        """Train selected BNN model on the collected data."""
+
+        # get data
         x_train, y_train, x_eval, y_eval, sim = (
             self.x_train,
             self.y_train,
@@ -191,15 +212,21 @@ class RLFromOfflineData:
             None,
         )
         x_test, y_test = self.x_test, self.y_test
+
+        # confirm shape
         print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
+
+        # create bnn model
         bnn = self.bnn_model
+
+        # set evaluation mode
         if self.test_data_ratio == 0.0:
             metrics_objective = "train_nll_loss"
             x_eval, y_eval = x_test, y_test
         else:
             metrics_objective = "eval_nll"
 
-        # Train the bnn model
+        # train bnn model
         bnn.fit(
             x_train=x_train,
             y_train=y_train,
@@ -213,24 +240,22 @@ class RLFromOfflineData:
         return bnn
 
     def prepare_init_transitions(self, key: chex.PRNGKey, number_of_samples: int):
+        """Prepare initial transitions for the buffer."""
+        # get simulator
         sim = SpotSimEnv(encode_angle=True)
 
+        # prepare transitions using simulator for the initial observations
         key_init_state = jr.split(key, number_of_samples)
         state_obs = vmap(sim.reset)(rng_key=key_init_state)
-        framestacked_actions = jnp.zeros(
-            shape=(number_of_samples, self.num_frame_stack * self.action_dim)
-        )
         actions = jnp.zeros(shape=(number_of_samples, self.action_dim))
         rewards = jnp.zeros(shape=(number_of_samples,))
         discounts = 0.99 * jnp.ones(shape=(number_of_samples,))
         transitions = Transition(
-            observation=jnp.concatenate([state_obs, framestacked_actions], axis=-1),
+            observation=jnp.concatenate([state_obs], axis=-1),
             action=actions,
             reward=rewards,
             discount=discounts,
-            next_observation=jnp.concatenate(
-                [state_obs, framestacked_actions], axis=-1
-            ),
+            next_observation=jnp.concatenate([state_obs], axis=-1),
         )
         return transitions
 
@@ -240,23 +265,26 @@ class RLFromOfflineData:
         true_data_buffer_state: ReplayBufferState,
         key: chex.PRNGKey,
     ):
+        """Train policy using SAC."""
 
+        # handle keys
+        key_train, key_simulate, key_init_state, *keys_sys_params = jr.split(key, 5)
+
+        # create a learned spot system
         system = LearnedSpotSystem(
             model=bnn_model,
             include_noise=self.include_aleatoric_noise,
             predict_difference=self.predict_difference,
-            num_frame_stack=self.num_frame_stack,
             **self.spot_reward_kwargs,
         )
 
-        key_train, key_simulate, key_init_state, *keys_sys_params = jr.split(key, 5)
-
-        # Here we add init points to the true_data_buffer
+        # add init points to the true_data_buffer
         key_init_state, key_init_buffer = jr.split(key_init_state)
         init_transitions = self.prepare_init_transitions(
             key_init_state, self.num_init_points_to_bs_for_learning
         )
 
+        # setup training buffer
         if self.train_sac_only_from_init_states:
             train_buffer_state = self.true_data_buffer.init(key_init_buffer)
             train_buffer_state = self.true_data_buffer.insert(
@@ -267,12 +295,7 @@ class RLFromOfflineData:
                 true_data_buffer_state, init_transitions
             )
 
-        env = BraxWrapper(
-            system=system,
-            sample_buffer_state=train_buffer_state,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
+        # setup evaluation buffer
         init_states_bs = train_buffer_state
         if self.eval_sac_only_from_init_states:
             init_states_bs = self.true_data_buffer.init(key_init_buffer)
@@ -280,6 +303,13 @@ class RLFromOfflineData:
                 init_states_bs, init_transitions
             )
 
+        # create training and eval environments (wrap system and insert buffer and init params)
+        env = BraxWrapper(
+            system=system,
+            sample_buffer_state=train_buffer_state,
+            sample_buffer=self.true_data_buffer,
+            system_params=system.init_params(keys_sys_params[0]),
+        )
         eval_env = BraxWrapper(
             system=system,
             sample_buffer_state=init_states_bs,
@@ -287,6 +317,7 @@ class RLFromOfflineData:
             system_params=system.init_params(keys_sys_params[0]),
         )
 
+        # create SAC trainer
         _sac_kwargs = self.sac_kwargs
         sac_trainer = SAC(
             environment=env,
@@ -296,8 +327,10 @@ class RLFromOfflineData:
             **_sac_kwargs,
         )
 
+        # train policy
         params, metrics = sac_trainer.run_training(key=key_train)
 
+        # get policy function
         make_inference_fn = sac_trainer.make_policy
 
         @jit
@@ -318,7 +351,7 @@ class RLFromOfflineData:
             self.y_eval,
             None,
         )
-        # Create a bnn model
+        # create a bnn model
         standard_model_params = {
             "input_size": x_train.shape[-1],
             "output_size": y_train.shape[-1],
@@ -336,7 +369,6 @@ class RLFromOfflineData:
             model=bnn,
             include_noise=self.include_aleatoric_noise,
             predict_difference=self.predict_difference,
-            num_frame_stack=self.num_frame_stack,
             **self.spot_reward_kwargs,
         )
 
@@ -367,34 +399,48 @@ class RLFromOfflineData:
     def evaluate_bnn_model_on_all_collected_data(
         self, bnn_model: BatchedNeuralNetworkModel
     ):
+        """Evaluate BNN model on all collected data."""
+
+        # get data
         data_source: str = "spot_real"
         data_spec: dict = {"num_samples_train": 4_100}
         x_data, y_data, _, _, sim = provide_data_and_sim(
             data_source=data_source, data_spec=data_spec
         )
+
+        # prepare data for predict_difference mode
         if self.predict_difference:
             y_data = y_data - x_data[..., : self.state_dim]
+
+        # evaluate bnn model
         eval_stats = bnn_model.eval(
             x_data, y_data, per_dim_metrics=True, prefix="eval_on_all_offline_data/"
         )
-        wandb.log(eval_stats)
+        if self.wandb_logging:
+            wandb.log(eval_stats)
 
     def eval_bnn_model_on_test_data(self, bnn_model: BatchedNeuralNetworkModel):
+        """Evaluate BNN model on test data."""
+
+        # get data
         x_test, y_test = self.x_test, self.y_test
+
+        # evaluate bnn model
         test_stats = bnn_model.eval(
             x_test, y_test, per_dim_metrics=True, prefix="test_data/"
         )
-        wandb.log(test_stats)
+        if self.wandb_logging:
+            wandb.log(test_stats)
 
     def prepare_policy_from_offline_data(
         self, bnn_train_steps: int = 10_000, return_best_bnn: bool = True
     ):
-        # Train bnn model
+        # train bnn model
         bnn_model = self.train_model(
             bnn_train_steps=bnn_train_steps, return_best_bnn=return_best_bnn
         )
 
-        # Save bnn model
+        # save bnn model
         directory = os.path.join(wandb.run.dir, "models")
         if not os.path.exists(directory):
             os.makedirs(directory)
@@ -403,29 +449,30 @@ class RLFromOfflineData:
             pickle.dump(bnn_model, handle)
         wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
 
-        # Evaluate bnn model on test data
-        if self.eval_bnn_model_on_all_offline_data:
+        # evaluate bnn model on all collected data
+        if self.evaluate_bnn_model_on_all_collected_data:
             self.evaluate_bnn_model_on_all_collected_data(bnn_model)
 
-        # Train policy
+        # train policy
         policy, params, metrics = self.train_policy(
             bnn_model, self.true_buffer_state, self.key
         )
 
-        # Save policy parameters
-        directory = os.path.join(wandb.run.dir, "models")
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-        model_path = os.path.join("models", "parameters.pkl")
-        with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
-            pickle.dump(params, handle)
-        wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
+        # save policy parameters
+        if self.wandb_logging:
+            directory = os.path.join(wandb.run.dir, "models")
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+            model_path = os.path.join("models", "parameters.pkl")
+            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
+                pickle.dump(params, handle)
+            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
 
         return policy, params, metrics, bnn_model
 
     @staticmethod
     def arg_mean(a: chex.Array):
-        # Return index of the element that is closest to the mean
+        """Return index of the element that is closest to the mean."""
         return jnp.argmin(jnp.abs(a - jnp.mean(a)))
 
     def evaluate_policy_on_the_simulator(
@@ -433,31 +480,33 @@ class RLFromOfflineData:
         policy: Callable,
         key: chex.PRNGKey = jr.PRNGKey(0),
         num_evals: int = 1,
+        save_traj_dir: str = None,
     ):
+        """Evaluate policy on the simulator."""
+
+        # get reward and trajectory on the simulator
         def reward_on_simulator(key: chex.PRNGKey):
-            actions_buffer = jnp.zeros(shape=(self.action_dim * self.num_frame_stack))
+            # init actions buffer, simulator and get initial observation
             sim = SpotSimEnv(
                 encode_angle=True,
-                action_delay=1 / 10 * self.num_frame_stack,
+                action_delay=0.0,
                 margin_factor=self.spot_reward_kwargs["margin_factor"],
                 ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
                 ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
                 max_steps=self.sac_kwargs["episode_length"],
             )
             obs = sim.reset(key)
+
+            # use policy on simulator
             done = False
             transitions_for_plotting = []
             while not done:
-                policy_input = jnp.concatenate([obs, actions_buffer], axis=-1)
+                # get action from policy
+                policy_input = jnp.concatenate([obs], axis=-1)
                 action = policy(policy_input)
+
+                # step simulator
                 next_obs, reward, done, info = sim.step(action)
-                # Prepare new actions buffer
-                if self.num_frame_stack > 0:
-                    next_actions_buffer = jnp.concatenate(
-                        [actions_buffer[self.action_dim :], action]
-                    )
-                else:
-                    next_actions_buffer = jnp.zeros(shape=(0,))
 
                 transitions_for_plotting.append(
                     Transition(
@@ -468,7 +517,6 @@ class RLFromOfflineData:
                         next_observation=next_obs,
                     )
                 )
-                actions_buffer = next_actions_buffer
                 obs = next_obs
 
             concatenated_transitions_for_plotting = jtu.tree_map(
@@ -477,28 +525,64 @@ class RLFromOfflineData:
             reward_on_simulator = jnp.sum(concatenated_transitions_for_plotting.reward)
             return reward_on_simulator, concatenated_transitions_for_plotting
 
+        # get rewards and trajectories
         rewards, trajectories = vmap(reward_on_simulator)(jr.split(key, num_evals))
 
+        # get mean and std of rewards
         reward_mean = jnp.mean(rewards)
         reward_std = jnp.std(rewards)
 
+        # get trajectory with mean reward
         reward_mean_index = self.arg_mean(rewards)
+        trajectory_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
 
-        transitions_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
-        fig, axes = plot_spot_trajectory(
-            transitions_mean.next_observation,
-            transitions_mean.action,
+        # plot trajectory evaluation
+        fig_eval, _ = plot_spot_trajectory(
+            trajectories,
             encode_angle=True,
+            plot_mode="transitions_eval_full",
         )
-        model_name = "simulator"
-        wandb.log(
-            {
-                f"Mean_trajectory_on_{model_name}": wandb.Image(fig),
-                f"reward_mean_on_{model_name}": float(reward_mean),
-                f"reward_std_on_{model_name}": float(reward_std),
-            }
+
+        # plot trajectory ee-goal distance
+        fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            plot_mode="transitions_distance_eval",
         )
-        plt.close("all")
+
+        if self.wandb_logging:
+            model_name = "simulator"
+            wandb.log(
+                {
+                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                    f"mean_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps
+                    ),
+                    f"reward_mean_on_{model_name}": float(reward_mean),
+                    f"reward_std_on_{model_name}": float(reward_std),
+                }
+            )
+            plt.close("all")
+
+        # save trajectories
+        if save_traj_dir is not None:
+            model_name = "simulator"
+            save_traj_dir = os.path.join(save_traj_dir, model_name)
+
+            # save trajectories
+            if not os.path.exists(save_traj_dir):
+                os.makedirs(save_traj_dir)
+            with open(
+                os.path.join(save_traj_dir, "trajectories_all.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectories, handle)
+            with open(
+                os.path.join(save_traj_dir, "trajectory_mean.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectory_mean, handle)
+
+            print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
 
     def evaluate_policy(
         self,
@@ -506,31 +590,40 @@ class RLFromOfflineData:
         bnn_model: BatchedNeuralNetworkModel | None = None,
         key: chex.PRNGKey = jr.PRNGKey(0),
         num_evals: int = 1,
+        save_traj_dir: str = None,
     ):
-        init_stacked_actions = jnp.zeros(
-            shape=(self.num_frame_stack * self.action_dim,)
-        )
+        """Evaluate policy on the learned model."""
+
+        # set parameters
+        eval_horizon = self.sac_kwargs["episode_length"]
         model_name = "pretrained_model" if bnn_model is None else "learned_model"
 
+        # create simulator
         sim = SpotSimEnv(encode_angle=True)
-        eval_horizon = self.sac_kwargs["episode_length"]
-        # Now we simulate the policy on the learned model
 
+        # handle keys
         key_init_obs, key_generate_trajectories = jr.split(key)
+        key_generate_trajectories = jr.split(key_generate_trajectories, num_evals)
         key_init_obs = jr.split(key_init_obs, num_evals)
+
+        # get initial observations from simulator
         obs = vmap(sim.reset)(rng_key=key_init_obs)
+
+        # get bnn model
         if bnn_model is None:
             bnn_model = self.bnn_model_pretrained
             if bnn_model is None:
                 raise ValueError("You have not loaded the pretrained model.")
+
+        # set up learned spot system
         learned_spot_system = LearnedSpotSystem(
             model=bnn_model,
             include_noise=self.include_aleatoric_noise,
             predict_difference=self.predict_difference,
-            num_frame_stack=self.num_frame_stack,
             **self.spot_reward_kwargs,
         )
 
+        # simulation step
         def f_step(carry, _):
             state, sys_params = carry
             action = policy(state)
@@ -539,149 +632,85 @@ class RLFromOfflineData:
             )
             new_state = sys_state.x_next
             transition = Transition(
-                observation=state[: self.state_dim],
+                observation=state[: self.state_dim_with_goal],
                 action=action,
                 reward=sys_state.reward,
                 discount=jnp.array(0.99),
-                next_observation=new_state[: self.state_dim],
+                next_observation=new_state[: self.state_dim_with_goal],
             )
             new_carry = (new_state, sys_state.system_params)
             return new_carry, transition
 
-        key_generate_trajectories = jr.split(key_generate_trajectories, num_evals)
-
+        # simulation loop
         def get_trajectory_transitions(init_obs, key):
             sys_params = learned_spot_system.init_params(key)
-            state = jnp.concatenate([init_obs, init_stacked_actions], axis=-1)
+            state = init_obs
             last_carry, transitions = scan(
                 f_step, (state, sys_params), None, length=eval_horizon
             )
             return transitions
 
+        # get trajectories
         trajectories = vmap(get_trajectory_transitions)(obs, key_generate_trajectories)
 
-        # Now we calculate mean reward and std of rewards
+        # get rewards
         rewards = jnp.sum(trajectories.reward, axis=-1)
+
+        # get mean and std of rewards
         reward_mean = jnp.mean(rewards)
         reward_std = jnp.std(rewards)
 
+        # get trajectory with mean reward
         reward_mean_index = self.arg_mean(rewards)
+        trajectory_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
 
-        transitions_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
+        # plot trajectory evaluation
         fig, axes = plot_spot_trajectory(
-            transitions_mean.next_observation,
-            transitions_mean.action,
+            trajectories,
             encode_angle=True,
+            plot_mode="transitions_eval_full",
+        )
+
+        # plot trajectory ee-goal distance
+        fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            plot_mode="transitions_distance_eval",
         )
 
         wandb.log(
             {
-                f"Mean_trajectory_on_{model_name}": wandb.Image(fig),
+                f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
+                f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                f"mean_error_after_10_steps_on_{model_name}": float(
+                    mean_error_after_10_steps
+                ),
                 f"reward_mean_on_{model_name}": float(reward_mean),
                 f"reward_std_on_{model_name}": float(reward_std),
             }
         )
         plt.close("all")
 
+        # save trajectories
+        if save_traj_dir is not None:
+            save_traj_dir = os.path.join(save_traj_dir, model_name)
+
+            # save trajectories
+            if not os.path.exists(save_traj_dir):
+                os.makedirs(save_traj_dir)
+            with open(
+                os.path.join(save_traj_dir, "trajectories_all.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectories, handle)
+            with open(
+                os.path.join(save_traj_dir, "trajectory_mean.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectory_mean, handle)
+
+            print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
+
 
 if __name__ == "__main__":
-    wandb.init(
-        project="Spot Test MBRL",
-        group="test",
-    )
-
-    spot_reward_kwargs = dict(
-        encode_angle=True,
-        ctrl_cost_weight=0.005,
-        margin_factor=20,
-        ctrl_diff_weight=0.1,
-    )
-
-    NUM_ENV_STEPS_BETWEEN_UPDATES = 16
-    NUM_ENVS = 64
-    sac_num_env_steps = 20_000
-    horizon_len = 50
-
-    SAC_KWARGS = dict(
-        num_timesteps=sac_num_env_steps,
-        num_evals=20,
-        reward_scaling=10,
-        episode_length=horizon_len,
-        episode_length_eval=2 * horizon_len,
-        action_repeat=1,
-        discounting=0.99,
-        lr_policy=3e-4,
-        lr_alpha=3e-4,
-        lr_q=3e-4,
-        num_envs=NUM_ENVS,
-        batch_size=64,
-        grad_updates_per_step=NUM_ENV_STEPS_BETWEEN_UPDATES * NUM_ENVS,
-        num_env_steps_between_updates=NUM_ENV_STEPS_BETWEEN_UPDATES,
-        tau=0.005,
-        wd_policy=0,
-        wd_q=0,
-        wd_alpha=0,
-        num_eval_envs=2 * NUM_ENVS,
-        max_replay_size=5 * 10**4,
-        min_replay_size=2**11,
-        policy_hidden_layer_sizes=(64, 64),
-        critic_hidden_layer_sizes=(64, 64),
-        normalize_observations=True,
-        deterministic_eval=True,
-        wandb_logging=True,
-    )
-
-    x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real",
-        data_spec={
-            "num_samples_train": 300,
-        },
-        data_seed=1234,
-    )
-
-    standard_params = {
-        "input_size": sim.input_size,
-        "output_size": sim.output_size,
-        "rng_key": jr.PRNGKey(0),
-        "likelihood_std": _SPOT_NOISE_STD_ENCODED,
-        "normalize_data": True,
-        "normalize_likelihood_std": True,
-        "learn_likelihood_std": True,
-        "likelihood_exponent": 0.5,
-        "hidden_layer_sizes": [64, 64, 64],
-        "data_batch_size": 32,
-    }
-
-    model = BNN_SVGD(
-        **standard_params,
-        num_train_steps=2_000,
-    )
-
-    rl_from_offline_data = RLFromOfflineData(
-        x_train=x_train,
-        y_train=y_train,
-        x_test=x_test,
-        y_test=y_test,
-        sac_kwargs=SAC_KWARGS,
-        spot_reward_kwargs=spot_reward_kwargs,
-        bnn_model=model,
-        test_data_ratio=0.1,
-        num_init_points_to_bs_for_sac_learning=100,
-        eval_sac_only_from_init_states=True,
-    )
-    policy, params, metrics, bnn_model = (
-        rl_from_offline_data.prepare_policy_from_offline_data(bnn_train_steps=2_000)
-    )
-    rl_from_offline_data.evaluate_policy_on_the_simulator(
-        policy, key=jr.PRNGKey(0), num_evals=100
-    )
-    # filename_params = os.path.join(wandb.run.dir, 'models/policy.pkl')
-    # filename_bnn_model = os.path.join(wandb.run.dir, 'models/bnn_svgd_model_on_20_000_points.pkl')
-    #
-    # with open(filename_bnn_model, 'rb') as handle:
-    #     bnn_model = pickle.load(handle)
-
-    # rl_from_offline_data.evaluate_policy(policy, key=jr.PRNGKey(0), num_evals=100)
-    # rl_from_offline_data.evaluate_policy(policy, bnn_model=bnn_model, key=jr.PRNGKey(0), num_evals=100)
-
-    wandb.finish()
+    # TODO: add test
+    print("Test execution not implemented.")
+    pass

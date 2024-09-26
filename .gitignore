@@ -1,15 +1,3 @@
-.idea/
-resources/
-results/
-old_results/
-log/
-tf_summaries/
-time_lines/
-lenart_internal/
-*.pdf
-*.csv
-mars/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -167,9 +155,20 @@ Temporary Items
 **/*.png
 **/*.jpg
 **/*.jpeg
+**/*.pdf
+**/*.csv
 
 # exlcluded files
 plotting_scripts/plots
 /experiments/1d_visualization/plot_dicts/
 /wandb/
 setup.py
+.idea/
+resources/
+results/
+old_results/
+log/
+tf_summaries/
+time_lines/
+lenart_internal/
+mars/

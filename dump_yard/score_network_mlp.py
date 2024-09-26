@@ -145,7 +145,8 @@ class ScoreMatchingEstimator:
 
 
 if __name__ == '__main__':
-    with jax.default_device
+    with jax.default_device:
+        pass
     from jax import device_put
     print(device_put(1, jax.devices()[1]).device_buffer.device())
 

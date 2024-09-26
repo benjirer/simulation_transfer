@@ -706,12 +706,12 @@ spot_model_gamma_set_5: Dict = {
 ################################ Parameter Bounds ################################
 
 bounds_spot_model_params: Dict = {
-    "alpha_base_1": (0.0, 1.0),
-    "alpha_base_2": (0.0, 1.0),
-    "alpha_base_3": (0.0, 1.0),
-    "alpha_ee_1": (0.0, 1.0),
-    "alpha_ee_2": (0.0, 1.0),
-    "alpha_ee_3": (0.0, 1.0),
+    "alpha_base_1": (0.0, 0.8),
+    "alpha_base_2": (0.0, 0.8),
+    "alpha_base_3": (0.0, 0.8),
+    "alpha_ee_1": (0.0, 0.2),
+    "alpha_ee_2": (0.0, 0.2),
+    "alpha_ee_3": (0.0, 0.6),
     "beta_base_1": (-0.003, 0.003),
     "beta_base_2": (-0.003, 0.003),
     "beta_base_3": (-0.003, 0.003),

@@ -1,4 +1,4 @@
-import exp
+import experiments.spot_offline_rl_from_recorded_data.exp_sim as exp_sim
 from experiments.util import generate_run_commands, generate_base_command, dict_permutations
 
 PROJECT_NAME = 'OfflineRLPretrainBNN'
@@ -59,7 +59,7 @@ all_flags_combinations = dict_permutations(_applicable_configs_no_sim_prior)
 def main():
     command_list = []
     for flags in all_flags_combinations:
-        cmd = generate_base_command(exp, flags=flags)
+        cmd = generate_base_command(exp_sim, flags=flags)
         command_list.append(cmd)
 
     # submit jobs

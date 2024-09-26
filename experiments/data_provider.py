@@ -152,11 +152,11 @@ DATASET_CONFIGS = {
     },
     "spot_real": {
         "likelihood_std": {"value": _SPOT_NOISE_STD_ENCODED.tolist()},
-        "num_samples_train": {"value": 100},
+        "num_samples_train": {"value": 4_400},
     },
     "spot_real_actionstack": {
         "likelihood_std": {"value": _SPOT_NOISE_STD_ENCODED.tolist()},
-        "num_samples_train": {"value": 100},
+        "num_samples_train": {"value": 4_400},
     },
 }
 
@@ -371,6 +371,7 @@ def _prepare_spot_datasets(
     action_delay_ee: int = 1,
     action_stacking: bool = False,
     angle_idx: int = 2,
+    add_goal: bool = False,
 ):
     # unpack dataset
     x, u, y = dataset_pre
@@ -394,19 +395,37 @@ def _prepare_spot_datasets(
     # remove first n steps (since often not much is happening)
     x, u, y = x[skip_first_n:], u[skip_first_n:], y[skip_first_n:]
 
+    if add_goal:
+        k = 10
+        goal_start_idx = 7 if encode_angles else 6
+        goal_end_idx = goal_start_idx + 3
+
+        goal = y[k:, goal_start_idx:goal_end_idx]
+
+        last_goal = y[-1, goal_start_idx:goal_end_idx]
+        padding = jnp.tile(last_goal, (k, 1))  # Repeat the last goal k times
+        goal = jnp.concatenate([goal, padding], axis=0)
+
+        assert (
+            x.shape[0] == y.shape[0] == u.shape[0] == goal.shape[0]
+        ), "Shapes of x,y,u or goal don't match, the shapes are: {}, {}, {}, {}".format(
+            x.shape, y.shape, u.shape, goal.shape
+        )
+
+        x = jnp.concatenate([x, goal], axis=-1)
+
     # concatenate state and action
     x_data = jnp.concatenate([x, u], axis=-1)  # current state + action
     y_data = y  # next state
 
     # check shapes
     assert x_data.shape[0] == y_data.shape[0]
-    if action_stacking:
-        assert (
-            x_data.shape[1] - 6 * (max(action_delay_base, action_delay_ee) + 1)
-            == y_data.shape[1]
-        )
-    else:
-        assert x_data.shape[1] - 6 == y_data.shape[1]
+    assert (
+        x_data.shape[1]
+        - 6 * (max(action_delay_base, action_delay_ee) * int(action_stacking) + 1)
+        - int(add_goal) * 3
+        == y_data.shape[1]
+    )
 
     return x_data, y_data
 
@@ -419,6 +438,8 @@ def get_spot_recorded_data(
     action_stacking: bool = False,
     num_test_points: int = 1000,
     angle_idx: int = 2,
+    shuffle: bool = True,
+    add_goal: bool = False,
 ):
     recordings_dirs = [
         os.path.join(DATA_DIR, "recordings_spot_v0"),
@@ -446,13 +467,15 @@ def get_spot_recorded_data(
         action_delay_ee=action_delay_ee,
         action_stacking=action_stacking,
         angle_idx=angle_idx,
+        add_goal=add_goal,
     )
     x, y = map(lambda x: jnp.concatenate(x, axis=0), zip(*map(prep_fn, datasets_pre)))
-    indices = jnp.arange(start=0, stop=x.shape[0], step=1)
-    indices = jax.random.permutation(
-        key=jax.random.PRNGKey(9345), x=indices, independent=True
-    )
-    x, y = x[indices], y[indices]
+    if shuffle:
+        indices = jnp.arange(start=0, stop=x.shape[0], step=1)
+        indices = jax.random.permutation(
+            key=jax.random.PRNGKey(9345), x=indices, independent=True
+        )
+        x, y = x[indices], y[indices]
 
     # split into train and test
     x_train, y_train, x_test, y_test = (
@@ -832,12 +855,23 @@ def provide_data_and_sim(
         from sim_transfer.sims.simulators import SpotSim
 
         defaults = DEFAULTS_SPOT
+        sampling_scheme = data_spec.get("sampling", DEFAULTS_SPOT_REAL["sampling"])
 
         # get data and sim
         if data_source == "spot_real":
             sim = SpotSim(encode_angle=True)
             print("[data_provider] Using real Spot data")
-            x_train, y_train, x_test, y_test = get_spot_recorded_data(encode_angle=True)
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True,
+            )
+        elif data_source == "spot_real_no_delay":
+            sim = SpotSim(encode_angle=True)
+            print("[data_provider] Using real Spot data with no delay")
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True,
+                action_delay_base=0,
+                action_delay_ee=0,
+            )
         elif data_source == "spot_real_actionstack":
             sim = SpotSim(encode_angle=True)
             num_stacked_actions = data_spec.get("num_stacked_actions", 2)
@@ -846,7 +880,36 @@ def provide_data_and_sim(
             )
             print("[data_provider] Using real Spot data with action stacking")
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
-                encode_angle=True, action_stacking=True
+                encode_angle=True,
+                action_stacking=True,
+            )
+        elif data_source == "spot_real_actionstack_no_shuffle":
+            sim = SpotSim(encode_angle=True)
+            num_stacked_actions = data_spec.get("num_stacked_actions", 2)
+            sim = StackedActionSimWrapper(
+                sim, num_stacked_actions=num_stacked_actions, action_size=6
+            )
+            print("[data_provider] Using real Spot data with action stacking")
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True,
+                action_stacking=True,
+                shuffle=False,
+            )
+        elif data_source == "spot_real_with_goal":
+            sim = SpotSim(encode_angle=True)
+            print("[data_provider] Using real Spot data with goal")
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True,
+                add_goal=True,
+            )
+        elif data_source == "spot_real_with_goal_no_delay":
+            sim = SpotSim(encode_angle=True)
+            print("[data_provider] Using real Spot data with goal and no delay")
+            x_train, y_train, x_test, y_test = get_spot_recorded_data(
+                encode_angle=True,
+                add_goal=True,
+                action_delay_base=0,
+                action_delay_ee=0,
             )
         else:
             raise ValueError(f"Unknown spot data source {data_source}")
@@ -861,7 +924,6 @@ def provide_data_and_sim(
         assert (
             num_train <= num_train_available and num_test <= num_test_available
         ), f"{num_train} > {num_train_available} or {num_test} > {num_test_available}"
-        sampling_scheme = data_spec.get("sampling", DEFAULTS_SPOT_REAL["sampling"])
         if sampling_scheme == "iid":
             # sample random subset (datapoints are not adjacent in time)
             import warnings
