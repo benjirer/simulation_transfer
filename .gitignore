@@ -162,7 +162,6 @@ Temporary Items
 plotting_scripts/plots
 /experiments/1d_visualization/plot_dicts/
 /wandb/
-setup.py
 .idea/
 resources/
 results/

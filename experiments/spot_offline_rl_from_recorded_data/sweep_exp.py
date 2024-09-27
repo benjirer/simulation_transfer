@@ -11,14 +11,14 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         # "model_seed": [922852, 123456, 654321],
         "model_seed": [922852],
         "data_seed": [0],
-        "horizon_len": [120],
+        "horizon_len": [150],
         "sac_num_env_steps": [2_000_000],
-        "project_name": ["spot_offline_policy_test"],
+        "project_name": ["spot_offline_policy_v2"],
         "best_policy": [1],
         "margin_factor": [5.0],
-        "ctrl_cost_weight": [0.005],
+        "ctrl_cost_weight": [0.005, 0.01, 0.02, 0.05],
         "ctrl_diff_weight": [0.01],
-        "num_offline_collected_transitions": [4100],
+        "num_offline_collected_transitions": [2000],
         "test_data_ratio": [0.1],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [0],
@@ -27,7 +27,6 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "obtain_consecutive_data": [0],
         "wandb_logging": [True],
         "save_traj_local": [False],
-
     }
 
     parameters_bnn = {
@@ -51,10 +50,18 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     }
 
     if model == "sim":
-        script_path = "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_sim.py"
+        script_path = (
+            "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_sim.py"
+            if mode == "euler"
+            else "/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_sim.py"
+        )
     elif model == "bnn":
         parameters.update(parameters_bnn)
-        script_path = "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_bnn.py"
+        script_path = (
+            "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_bnn.py"
+            if mode == "euler"
+            else "/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_bnn.py"
+        )
 
     python_path = sys.executable
 
@@ -86,8 +93,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
 if __name__ == "__main__":
     """Experiment settings"""
-    model = "bnn"
-    mode = "euler"
+    model = "sim"
+    mode = "local"
     num_cpus = 1
     num_gpus = 1
     mem = 16000

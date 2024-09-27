@@ -234,6 +234,43 @@ class RLFromOfflineData:
 
         return policy, params, metrics
 
+    def prepare_policy(self, params: Any | None = None, filename: str = None):
+        """Prepare policy function for inference from parameters or file."""
+        
+        # load parameters from file if not provided
+        if params is None:
+            with open(filename, 'rb') as handle:
+                params = pickle.load(handle)
+
+        # create spot system
+        system = SpotSystem(encode_angle=True, action_delay=0.00)
+
+        # handle keys
+        key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
+
+        # create env
+        env = BraxWrapper(system=system,
+                        sample_buffer_state=self.true_buffer_state,
+                        sample_buffer=self.true_data_buffer,
+                        system_params=system.init_params(keys_sys_params[0]))
+
+        # create SAC trainer
+        _sac_kwargs = self.sac_kwargs
+        sac_trainer = SAC(environment=env,
+                        eval_environment=env,
+                        eval_key_fixed=True,
+                        return_best_model=self.return_best_policy,
+                        **_sac_kwargs, )
+        
+        # get policy function
+        make_inference_fn = sac_trainer.make_policy
+
+        @jit
+        def policy(x):
+            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
+
+        return policy
+
     def prepare_policy_from_offline_data(
         self,
     ):
