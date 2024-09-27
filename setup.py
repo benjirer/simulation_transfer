@@ -16,7 +16,7 @@ required = [
     'tensorflow-probability==0.24.0',
     'tensorflow-datasets==4.9.6',
     'tensorflow==2.16.1',
-    'pytest==8.3.2',
+    'pytest',
     'gym',
     'XInput-Python==0.4.0',
     'XInput==0.1.3',
