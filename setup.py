@@ -17,7 +17,7 @@ required = [
     'tensorflow-datasets==4.9.6',
     'tensorflow==2.16.1',
     'pytest==8.3.2',
-    'gym==0.23.1',
+    'gym',
     'XInput-Python==0.4.0',
     'XInput==0.1.3',
     'distro==1.9.0',
