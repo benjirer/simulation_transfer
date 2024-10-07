@@ -213,9 +213,6 @@ class RLFromOfflineData:
         )
         x_test, y_test = self.x_test, self.y_test
 
-        # confirm shape
-        print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
-
         # create bnn model
         bnn = self.bnn_model
 
@@ -225,6 +222,18 @@ class RLFromOfflineData:
             x_eval, y_eval = x_test, y_test
         else:
             metrics_objective = "eval_nll"
+
+        # confirm shape
+        print(
+            "x_train.shape",
+            x_train.shape,
+            "y_train.shape",
+            y_train.shape,
+            "x_eval.shape",
+            x_eval.shape,
+            "y_eval.shape",
+            y_eval.shape,
+        )
 
         # train bnn model
         bnn.fit(
@@ -340,10 +349,14 @@ class RLFromOfflineData:
         return policy, params, metrics
 
     def prepare_policy(self, params: Any | None = None, filename: str = None):
+        """Prepare policy function for inference from parameters or file."""
+
+        # load params from file if not provided directly
         if params is None:
             with open(filename, "rb") as handle:
                 params = pickle.load(handle)
 
+        # get data (only used for shape)
         x_train, y_train, x_test, y_test, sim = (
             self.x_train,
             self.y_train,
@@ -351,6 +364,7 @@ class RLFromOfflineData:
             self.y_eval,
             None,
         )
+
         # create a bnn model
         standard_model_params = {
             "input_size": x_train.shape[-1],
@@ -365,6 +379,8 @@ class RLFromOfflineData:
             "data_batch_size": 32,
         }
         bnn = BNN_SVGD(**standard_model_params, bandwidth_svgd=1.0)
+
+        # create learned spot system
         system = LearnedSpotSystem(
             model=bnn,
             include_noise=self.include_aleatoric_noise,
@@ -372,7 +388,10 @@ class RLFromOfflineData:
             **self.spot_reward_kwargs,
         )
 
+        # handle keys
         key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
+
+        # create env
         env = BraxWrapper(
             system=system,
             sample_buffer_state=self.true_buffer_state,
@@ -380,6 +399,7 @@ class RLFromOfflineData:
             system_params=system.init_params(keys_sys_params[0]),
         )
 
+        # create SAC trainer
         _sac_kwargs = self.sac_kwargs
         sac_trainer = SAC(
             environment=env,
@@ -388,6 +408,8 @@ class RLFromOfflineData:
             return_best_model=self.return_best_policy,
             **_sac_kwargs,
         )
+
+        # get policy function
         make_inference_fn = sac_trainer.make_policy
 
         @jit
@@ -435,6 +457,8 @@ class RLFromOfflineData:
     def prepare_policy_from_offline_data(
         self, bnn_train_steps: int = 10_000, return_best_bnn: bool = True
     ):
+        """Prepare policy from offline data."""
+
         # train bnn model
         bnn_model = self.train_model(
             bnn_train_steps=bnn_train_steps, return_best_bnn=return_best_bnn
@@ -482,7 +506,7 @@ class RLFromOfflineData:
         num_evals: int = 1,
         save_traj_dir: str = None,
     ):
-        """Evaluate policy on the simulator."""
+        """Evaluate policy on the default simulator."""
 
         # get reward and trajectory on the simulator
         def reward_on_simulator(key: chex.PRNGKey):
@@ -551,7 +575,7 @@ class RLFromOfflineData:
         )
 
         if self.wandb_logging:
-            model_name = "simulator"
+            model_name = "default_simulator"
             wandb.log(
                 {
                     f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
@@ -567,7 +591,7 @@ class RLFromOfflineData:
 
         # save trajectories
         if save_traj_dir is not None:
-            model_name = "simulator"
+            model_name = "default_simulator"
             save_traj_dir = os.path.join(save_traj_dir, model_name)
 
             # save trajectories

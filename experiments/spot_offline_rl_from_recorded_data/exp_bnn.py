@@ -20,8 +20,7 @@ from sim_transfer.sims.simulators import (
 def experiment(
     # variable parameters
     horizon_len: int,
-    model_seed: int,
-    data_seed: int,
+    random_seed: int,
     project_name: str,
     sac_num_env_steps: int,
     best_policy: int,
@@ -123,8 +122,7 @@ def experiment(
 
     config_dict = dict(
         horizon_len=horizon_len,
-        model_seed=model_seed,
-        data_seed=data_seed,
+        random_seed=random_seed,
         sac_num_env_steps=sac_num_env_steps,
         best_policy=best_policy,
         margin_factor=margin_factor,
@@ -163,8 +161,7 @@ def experiment(
         )
 
     # deal with randomness
-    model_key = jr.PRNGKey(model_seed)
-    data_key = jr.PRNGKey(data_seed)
+    data_key, model_key = jr.split(jr.PRNGKey(random_seed), 2)
     int_data_seed = jr.randint(data_key, (), minval=0, maxval=2**13 - 1)
     (
         key_bnn,
@@ -331,7 +328,7 @@ def experiment(
         save_traj_dir=f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}" if save_traj_local else None,
     )
 
-    # evaluate policy on simulator
+    # evaluate policy on default simulator
     rl_from_offline_data.evaluate_policy_on_the_simulator(
         policy,
         key=key_evaluation_pretrained_bnn,
@@ -351,8 +348,7 @@ def experiment(
 def main(args):
     experiment(
         # parameters
-        model_seed=args.model_seed,
-        data_seed=args.data_seed,
+        random_seed=args.random_seed,
         project_name=args.project_name,
         horizon_len=args.horizon_len,
         sac_num_env_steps=args.sac_num_env_steps,
@@ -396,8 +392,7 @@ if __name__ == "__main__":
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
     # parameters
-    parser.add_argument("--model_seed", type=int, default=922852)
-    parser.add_argument("--data_seed", type=int, default=0)
+    parser.add_argument("--random_seed", type=int, default=922852)
     parser.add_argument("--horizon_len", type=int, default=120)
     parser.add_argument("--sac_num_env_steps", type=int, default=2_000_000)
     parser.add_argument("--project_name", type=str, default="spot_offline_policy")

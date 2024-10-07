@@ -446,6 +446,7 @@ def get_spot_recorded_data(
         os.path.join(DATA_DIR, "recordings_spot_v1"),
         os.path.join(DATA_DIR, "recordings_spot_v2"),
         os.path.join(DATA_DIR, "recordings_spot_v3"),
+        os.path.join(DATA_DIR, "recordings_spot_v4"),
     ]
     files = sorted(
         [

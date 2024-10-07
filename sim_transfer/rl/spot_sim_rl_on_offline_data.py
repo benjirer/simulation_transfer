@@ -36,6 +36,7 @@ class RLFromOfflineData:
         sac_kwargs: dict = None,
         key: chex.PRNGKey = jr.PRNGKey(0),
         return_best_policy: bool = True,
+        num_offline_collected_transitions: int = 1000,
         test_data_ratio: float = 0.1,
         num_init_points_to_bs_for_sac_learning: int | None = 100,
         eval_sac_only_from_init_states: bool = False,
@@ -46,11 +47,14 @@ class RLFromOfflineData:
         self.wandb_logging = wandb_logging
         self.eval_sac_only_from_init_states = eval_sac_only_from_init_states
         self.train_sac_only_from_init_states = train_sac_only_from_init_states
+        self.num_offline_collected_transitions = num_offline_collected_transitions
         self.test_data_ratio = test_data_ratio
         self.key = key
         self.return_best_policy = return_best_policy
         self.spot_reward_kwargs = spot_reward_kwargs
         self.sac_kwargs = sac_kwargs
+        self.spot_learned_params = None # setting none forces use of default params
+        self.spot_learned_observation_noise_std = None # setting none forces use of default params
 
         # split the train data into train and eval
         self.key, key_split = jr.split(self.key)
@@ -64,7 +68,7 @@ class RLFromOfflineData:
         self.num_init_points_to_bs_for_learning = num_init_points_to_bs_for_sac_learning
 
         # set dimensions
-        # Note: raw x is built from [state (12/13), goal (3), action (6)] = 21/22
+        # note: raw x is built from [state (12/13), goal (3), action (6)] = 21/22
         state_dim = 13
         action_dim = 6
         goal_dim = 3
@@ -112,6 +116,13 @@ class RLFromOfflineData:
         true_buffer_state = self.true_data_buffer.insert(true_buffer_state, transitions)
         self.true_buffer_state = true_buffer_state
 
+        self.x_train = x_train
+        self.y_train = y_train
+        self.x_eval = x_eval
+        self.y_eval = y_eval
+        self.x_test = x_test
+        self.y_test = y_test
+
     @staticmethod
     def shuffle_and_split_data(x_data, y_data, test_ratio, key: chex.PRNGKey):
         """Permute and split data into train and test sets."""
@@ -156,6 +167,42 @@ class RLFromOfflineData:
             next_observation=jnp.concatenate([state_obs], axis=-1),
         )
         return transitions
+    
+    def eval_sim_model_on_all_collected_data(self):
+        """Evaluate learned simulator on all collected data."""
+
+        from experiments.spot_system_id.system_id_spot import extra_eval_learned_model
+
+        extra_eval_learned_model(
+            spot_learned_params=self.spot_learned_params,
+            num_offline_collected_transitions=self.num_offline_collected_transitions,
+            wandb_logging=self.wandb_logging,
+            use_all_data=True,
+        )
+    
+    def eval_sim_model_on_dedicated_data(self):
+        """Evaluate learned simulator on the dedicated set of data."""
+
+        from experiments.spot_system_id.system_id_spot import extra_eval_learned_model
+
+        extra_eval_learned_model(
+            spot_learned_params=self.spot_learned_params,
+            num_offline_collected_transitions=self.num_offline_collected_transitions,
+            wandb_logging=self.wandb_logging,
+        )
+    
+    def train_simulator(
+        self,
+    ):
+        from experiments.spot_system_id.system_id_spot import execute_spot_system_id
+
+        spot_learned_params, spot_learned_observation_noise_std = execute_spot_system_id(
+            random_seed=self.key[0],
+            num_offline_collected_transitions=self.num_offline_collected_transitions,
+            test_data_ratio=self.test_data_ratio,
+            wandb_logging=self.wandb_logging,
+        )
+        return spot_learned_params, spot_learned_observation_noise_std
 
     def train_policy(
         self,
@@ -171,6 +218,8 @@ class RLFromOfflineData:
         system = SpotSystem(
             encode_angle=True,
             action_delay=0.00,
+            spot_model_params=self.spot_learned_params,
+            spot_obs_noise_std=self.spot_learned_observation_noise_std,
         )
 
         # add init points to the true_data_buffer
@@ -236,32 +285,41 @@ class RLFromOfflineData:
 
     def prepare_policy(self, params: Any | None = None, filename: str = None):
         """Prepare policy function for inference from parameters or file."""
-        
+
         # load parameters from file if not provided
         if params is None:
-            with open(filename, 'rb') as handle:
+            with open(filename, "rb") as handle:
                 params = pickle.load(handle)
 
         # create spot system
-        system = SpotSystem(encode_angle=True, action_delay=0.00)
+        system = SpotSystem(
+            encode_angle=True,
+            action_delay=0.00,
+            spot_model_params=self.spot_learned_params,
+            spot_obs_noise_std=self.spot_learned_observation_noise_std,
+        )
 
         # handle keys
         key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
 
         # create env
-        env = BraxWrapper(system=system,
-                        sample_buffer_state=self.true_buffer_state,
-                        sample_buffer=self.true_data_buffer,
-                        system_params=system.init_params(keys_sys_params[0]))
+        env = BraxWrapper(
+            system=system,
+            sample_buffer_state=self.true_buffer_state,
+            sample_buffer=self.true_data_buffer,
+            system_params=system.init_params(keys_sys_params[0]),
+        )
 
         # create SAC trainer
         _sac_kwargs = self.sac_kwargs
-        sac_trainer = SAC(environment=env,
-                        eval_environment=env,
-                        eval_key_fixed=True,
-                        return_best_model=self.return_best_policy,
-                        **_sac_kwargs, )
-        
+        sac_trainer = SAC(
+            environment=env,
+            eval_environment=env,
+            eval_key_fixed=True,
+            return_best_model=self.return_best_policy,
+            **_sac_kwargs,
+        )
+
         # get policy function
         make_inference_fn = sac_trainer.make_policy
 
@@ -274,6 +332,25 @@ class RLFromOfflineData:
     def prepare_policy_from_offline_data(
         self,
     ):
+        """Prepare policy from offline data."""
+        
+        # train simulator
+        self.spot_learned_params, self.spot_learned_observation_noise_std = self.train_simulator()
+
+        # save sim model and noise std
+        directory = os.path.join(wandb.run.dir, "models")
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        model_path = os.path.join("models", "sim_params.pkl")
+        with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
+            pickle.dump(self.spot_learned_params, handle)
+        wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
+        noise_std_path = os.path.join("models", "sim_observation_noise_std.pkl")
+        with open(os.path.join(wandb.run.dir, noise_std_path), "wb") as handle:
+            pickle.dump(self.spot_learned_observation_noise_std, handle)
+        wandb.save(os.path.join(wandb.run.dir, noise_std_path), wandb.run.dir)
+
+
         # train policy
         policy, params, metrics = self.train_policy(self.true_buffer_state, self.key)
 
@@ -301,7 +378,7 @@ class RLFromOfflineData:
         num_evals: int = 1,
         save_traj_dir: str = None,
     ):
-        """Evaluate policy on the simulator."""
+        """Evaluate policy on the default simulator."""
 
         # get reward and trajectory on the simulator
         def reward_on_simulator(key: chex.PRNGKey):
@@ -369,7 +446,7 @@ class RLFromOfflineData:
         )
 
         if self.wandb_logging:
-            model_name = "simulator"
+            model_name = "default_simulator"
             wandb.log(
                 {
                     f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
@@ -385,7 +462,7 @@ class RLFromOfflineData:
 
         # save trajectories
         if save_traj_dir is not None:
-            model_name = "simulator"
+            model_name = "default_simulator"
             save_traj_dir = os.path.join(save_traj_dir, model_name)
 
             # save trajectories
@@ -401,6 +478,115 @@ class RLFromOfflineData:
                 pickle.dump(trajectory_mean, handle)
 
             print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
+    
+    def evaluate_policy_on_the_simulator_test(
+        self,
+        policy: Callable,
+        key: chex.PRNGKey = jr.PRNGKey(0),
+        num_evals: int = 1,
+        save_traj_dir: str = None,
+    ):
+        """Evaluate policy on the default simulator."""
+
+        # get reward and trajectory on the simulator
+        def reward_on_simulator(key: chex.PRNGKey):
+            # init actions buffer, simulator and get initial observation
+            sim = SpotSimEnv(
+                encode_angle=True,
+                action_delay=0.0,
+                margin_factor=self.spot_reward_kwargs["margin_factor"],
+                ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
+                ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+                max_steps=self.sac_kwargs["episode_length"],
+            )
+            obs = sim.reset(key)
+
+            # use policy on simulator
+            done = False
+            transitions_for_plotting = []
+            while not done:
+                # get action from policy
+                policy_input = jnp.concatenate([obs], axis=-1)
+                action = policy(policy_input)
+
+                # step simulator
+                next_obs, reward, done, info = sim.step(action)
+
+                transitions_for_plotting.append(
+                    Transition(
+                        observation=obs,
+                        action=action,
+                        reward=jnp.array(reward),
+                        discount=jnp.array(0.99),
+                        next_observation=next_obs,
+                    )
+                )
+                obs = next_obs
+
+            concatenated_transitions_for_plotting = jtu.tree_map(
+                lambda *xs: jnp.stack(xs, axis=0), *transitions_for_plotting
+            )
+            reward_on_simulator = jnp.sum(concatenated_transitions_for_plotting.reward)
+            return reward_on_simulator, concatenated_transitions_for_plotting
+
+        rewards, trajectories = vmap(reward_on_simulator)(jr.split(key, num_evals))
+
+        # get mean and std of rewards
+        reward_mean = jnp.mean(rewards)
+        reward_std = jnp.std(rewards)
+
+        # get trajectory with mean reward
+        reward_mean_index = self.arg_mean(rewards)
+        trajectory_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
+
+        # plot trajectory evaluation
+        fig_eval, _ = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            plot_mode="transitions_eval_full",
+        )
+
+        # plot trajectory ee-goal distance
+        fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            plot_mode="transitions_distance_eval",
+        )
+
+        if self.wandb_logging:
+            model_name = "default_simulator"
+            wandb.log(
+                {
+                    f"Test_Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                    f"Test_Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                    f"Test_mean_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps
+                    ),
+                    f"Test_reward_mean_on_{model_name}": float(reward_mean),
+                    f"Test_reward_std_on_{model_name}": float(reward_std),
+                }
+            )
+            plt.close("all")
+
+        # save trajectories
+        if save_traj_dir is not None:
+            model_name = "test_default_simulator"
+            save_traj_dir = os.path.join(save_traj_dir, model_name)
+
+            # save trajectories
+            if not os.path.exists(save_traj_dir):
+                os.makedirs(save_traj_dir)
+            with open(
+                os.path.join(save_traj_dir, "trajectories_all.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectories, handle)
+            with open(
+                os.path.join(save_traj_dir, "trajectory_mean.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectory_mean, handle)
+
+            print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
+
 
 
 if __name__ == "__main__":

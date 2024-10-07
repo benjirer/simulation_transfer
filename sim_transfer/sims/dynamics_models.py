@@ -1150,7 +1150,7 @@ class SpotDynamicsModel(DynamicsModel):
         dt,
         encode_angle: bool = True,
         input_in_local_frame: bool = True,
-        use_constraints: bool = True,
+        use_constraints: bool = False,
     ):
         self.encode_angle = encode_angle
         self.input_in_local_frame = input_in_local_frame
@@ -1228,7 +1228,7 @@ class SpotDynamicsModel(DynamicsModel):
                 def true_fun_base(q_pre):
                     # recall dx with EE vel commands set to zero
                     u_constrained = jnp.concatenate([u[:3], jnp.zeros(3)])
-                    dx_constrained = self.ode(q_pre, u_constrained, params, ee_constrained_dist=jnp.array(0.0))
+                    dx_constrained = self.ode(carry, u_constrained, params, ee_constrained_dist=jnp.array(0.0))
                     q_constrained = update_q(
                         carry, dx_constrained, gamma, beta_pos, beta_vel
                     )
@@ -1298,11 +1298,14 @@ class SpotDynamicsModel(DynamicsModel):
             q_updated = update_q(carry, dx, gamma, beta_pos, beta_vel)
 
             # check constraints
-            q_constrained = constrain_update(
-                carry, q_updated, u, params, gamma, beta_pos, beta_vel
-            )
+            if self.use_constraints:
+                q_constrained = constrain_update(
+                    carry, q_updated, u, params, gamma, beta_pos, beta_vel
+                )
 
-            return q_constrained if self.use_constraints else q_updated, None
+                return q_constrained, None
+            else:
+                return q_updated, None
 
         next_state, _ = jax.lax.scan(body, x, xs=None, length=self._num_steps_integrate)
 

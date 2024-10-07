@@ -12,8 +12,7 @@ from sim_transfer.rl.spot_sim_rl_on_offline_data import RLFromOfflineData
 def experiment(
     # variable parameters
     horizon_len: int,
-    model_seed: int,
-    data_seed: int,
+    random_seed: int,
     project_name: str,
     sac_num_env_steps: int,
     best_policy: int,
@@ -24,7 +23,6 @@ def experiment(
     share_of_x0s_in_sac_buffer: float,
     eval_only_on_init_states: int,
     train_sac_only_from_init_states: int,
-    
     # default parameters
     eval_on_all_offline_data: int = 1,
     test_data_ratio: float = 0.1,
@@ -90,8 +88,7 @@ def experiment(
 
     config_dict = dict(
         horizon_len=horizon_len,
-        model_seed=model_seed,
-        data_seed=data_seed,
+        random_seed=random_seed,
         sac_num_env_steps=sac_num_env_steps,
         best_policy=best_policy,
         margin_factor=margin_factor,
@@ -114,8 +111,7 @@ def experiment(
         )
 
     # deal with randomness
-    model_key = jr.PRNGKey(model_seed)
-    data_key = jr.PRNGKey(data_seed)
+    model_key, data_key = jr.split(jr.PRNGKey(random_seed), 2)
     int_data_seed = jr.randint(data_key, (), minval=0, maxval=2**13 - 1)
     key_offline_rl, key_evaluation_pretrained_bnn = jr.split(model_key, 2)
 
@@ -160,6 +156,7 @@ def experiment(
         sac_kwargs=SAC_KWARGS,
         spot_reward_kwargs=spot_reward_kwargs,
         return_best_policy=bool(best_policy),
+        num_offline_collected_transitions=num_offline_collected_transitions,
         test_data_ratio=test_data_ratio,
         eval_sac_only_from_init_states=bool(eval_only_on_init_states),
         num_init_points_to_bs_for_sac_learning=num_init_points_to_bs_for_sac_learning,
@@ -168,12 +165,132 @@ def experiment(
     )
     policy, params, metrics = rl_from_offline_data.prepare_policy_from_offline_data()
 
-    # evaluate policy on simulator
+    # evaluate learned model
+    rl_from_offline_data.eval_sim_model_on_dedicated_data()
+
+    # evaluate policy on default simulator
     rl_from_offline_data.evaluate_policy_on_the_simulator(
         policy,
         key=key_evaluation_pretrained_bnn,
         num_evals=50,
-        save_traj_dir=f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}" if save_traj_local else None,
+        save_traj_dir=(
+            f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
+            if save_traj_local
+            else None
+        ),
+    )
+
+    # for testing: prepare policy as in real robot and then test
+
+    # get offline trained agent
+    def get_offline_trained_agent(
+        state_dim: int,
+        action_dim: int,
+        goal_dim: int,
+    ):
+        import pickle
+        import yaml
+
+        # fetch learned policy
+        wandb_api = wandb.Api()
+        project_name = wandb.run.project
+        run_id = run_id = wandb.run.id
+        local_dir = "saved_data"
+
+        if not os.path.exists(local_dir):
+            os.makedirs(local_dir)
+
+        run = wandb_api.run(f"{project_name}/{run_id}")
+        run.file("models/parameters.pkl").download(
+            replace=True, root=os.path.join(local_dir)
+        )
+
+        # get reward config
+        reward_keys = [
+            "encode_angle",
+            "ctrl_cost_weight",
+            "margin_factor",
+            "ctrl_diff_weight",
+        ]
+        reward_config = {}
+        for key in reward_keys:
+            reward_config[key] = run.config[key]
+
+        # save reward config
+        with open(os.path.join(local_dir, "reward_config.yaml"), "w") as file:
+            yaml.dump(reward_config, file)
+
+        # get policy params
+        policy_params = pickle.load(
+            open(os.path.join(local_dir, "models/parameters.pkl"), "rb")
+        )
+
+        # get reward config
+        reward_config = yaml.load(
+            open(os.path.join(local_dir, "reward_config.yaml"), "r"),
+            Loader=yaml.Loader,
+        )
+
+        SAC_KWARGS_TEST = dict(
+            num_timesteps=1_000_000,
+            num_evals=20,
+            reward_scaling=10,
+            episode_length=50,
+            episode_length_eval=2 * 50,
+            action_repeat=1,
+            discounting=0.99,
+            lr_policy=3e-4,
+            lr_alpha=3e-4,
+            lr_q=3e-4,
+            num_envs=64,
+            batch_size=64,
+            grad_updates_per_step=16 * 64,
+            num_env_steps_between_updates=16,
+            tau=0.005,
+            wd_policy=0,
+            wd_q=0,
+            wd_alpha=0,
+            num_eval_envs=2 * 64,
+            max_replay_size=5 * 10**4,
+            min_replay_size=2**11,
+            policy_hidden_layer_sizes=(64, 64),
+            critic_hidden_layer_sizes=(64, 64),
+            normalize_observations=True,
+            deterministic_eval=True,
+            wandb_logging=False,
+        )
+
+        return policy_params, reward_config, SAC_KWARGS_TEST
+
+    state_dim = 13
+    action_dim = 6
+    goal_dim = 3
+
+    policy_params, reward_config, SAC_KWARGS_TEST = get_offline_trained_agent(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        goal_dim=goal_dim,
+    )
+
+    rl_from_offline_data_test = RLFromOfflineData(
+        sac_kwargs=SAC_KWARGS_TEST,
+        x_train=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
+        y_train=jax.numpy.zeros((10, state_dim)),
+        x_test=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
+        y_test=jax.numpy.zeros((10, state_dim)),
+        spot_reward_kwargs=reward_config,
+    )
+    policy_test = rl_from_offline_data_test.prepare_policy(params=policy_params)
+
+    rl_from_offline_data_test.evaluate_policy_on_the_simulator_test(
+        policy_test,
+        key=key_evaluation_pretrained_bnn,
+        num_evals=50,
+        save_traj_dir=(
+            f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
+            if save_traj_local
+            else None
+        ),
     )
 
     if wandb_logging:
@@ -182,8 +299,7 @@ def experiment(
 
 def main(args):
     experiment(
-        model_seed=args.model_seed,
-        data_seed=args.data_seed,
+        random_seed=args.random_seed,
         project_name=args.project_name,
         horizon_len=args.horizon_len,
         sac_num_env_steps=args.sac_num_env_steps,
@@ -199,7 +315,7 @@ def main(args):
         train_sac_only_from_init_states=args.train_sac_only_from_init_states,
         obtain_consecutive_data=args.obtain_consecutive_data,
         wandb_logging=args.wandb_logging,
-        save_traj_local=args.save_traj_local
+        save_traj_local=args.save_traj_local,
     )
 
 
@@ -207,19 +323,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # prevent TF from reserving all GPU memory
-    os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-    
+    os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
     # parameters
-    parser.add_argument("--model_seed", type=int, default=922852)
-    parser.add_argument("--data_seed", type=int, default=0)
+    parser.add_argument("--random_seed", type=int, default=922852)
     parser.add_argument("--horizon_len", type=int, default=120)
-    parser.add_argument("--sac_num_env_steps", type=int, default=2_000_000)
-    parser.add_argument("--project_name", type=str, default="spot_offline_policy")
+    parser.add_argument("--sac_num_env_steps", type=int, default=10_000)
+    parser.add_argument("--project_name", type=str, default="testing")
     parser.add_argument("--best_policy", type=int, default=1)
     parser.add_argument("--margin_factor", type=float, default=5.0)
     parser.add_argument("--ctrl_cost_weight", type=float, default=0.01)
     parser.add_argument("--ctrl_diff_weight", type=float, default=0.01)
-    parser.add_argument("--num_offline_collected_transitions", type=int, default=4_100)
+    parser.add_argument("--num_offline_collected_transitions", type=int, default=5_000)
     parser.add_argument("--test_data_ratio", type=float, default=0.1)
     parser.add_argument("--share_of_x0s_in_sac_buffer", type=float, default=0.5)
     parser.add_argument("--eval_only_on_init_states", type=int, default=0)
