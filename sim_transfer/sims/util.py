@@ -200,18 +200,34 @@ def plot_spot_trajectory(
     encode_angle: bool = False,
     plot_mode: str = "simple",
     goal: Optional[jnp.array] = None,
+    state_dim: int = 12,
+    goal_dim: int = 3,
+    action_dim: int = 6,
+    num_frame_stack: int = 0,
 ):
     """Plots the trajectory of the spot robot"""
 
+    # TODO: Fix this according to state dimensions
+
+    assert (state_dim == 12 and not encode_angle) or (
+        state_dim == 13 and encode_angle
+    ), f"Invalid state dim {state_dim} and encode angle {encode_angle} combination"
+
     if plot_mode == "extended":
-        print("Plotting spot trajectory in extended mode with trajectory shape", traj.shape)
+        print(
+            "Plotting spot trajectory in extended mode with trajectory shape",
+            traj.shape,
+        )
+
+        # get state only
+        traj = traj[:, :state_dim]
+
         scale_factor = 1.5
-        n_rows = traj.shape[-1]
+        n_rows = state_dim
         n_rows_extra = 2 if goal is not None else 1
         n_cols = 2 if actions is not None else 1
 
-        if n_rows == 13 and not encode_angle:
-            n_rows = 12
+        if not encode_angle:
             traj = decode_angles(traj, 2)
             state_labels = [
                 "base_x",
@@ -245,7 +261,9 @@ def plot_spot_trajectory(
             ]
 
         fig, axes = plt.subplots(
-            nrows=n_rows + n_rows_extra, ncols=n_cols, figsize=(scale_factor * 8, scale_factor * 10)
+            nrows=n_rows + n_rows_extra,
+            ncols=n_cols,
+            figsize=(scale_factor * 8, scale_factor * 10),
         )
 
         action_labels = [
@@ -315,7 +333,9 @@ def plot_spot_trajectory(
 
         # plot distance between base and ee
         base_pos_pre = traj[:, :2]
-        base_pos = jnp.concatenate([base_pos_pre, 0.445 * jnp.ones_like(traj[:, :1])], axis=-1)
+        base_pos = jnp.concatenate(
+            [base_pos_pre, 0.445 * jnp.ones_like(traj[:, :1])], axis=-1
+        )
         ee_pos = traj[:, 7:10] if encode_angle else traj[:, 6:9]
         pos_dist = jnp.linalg.norm(base_pos - ee_pos, axis=-1)
         axes[-n_rows_extra][0].plot(pos_dist)
@@ -331,9 +351,14 @@ def plot_spot_trajectory(
         return fig, axes
 
     elif plot_mode == "simple":
-        print("Plotting spot trajectory in simple mode with trajectory shape", traj.shape)
+        print(
+            "Plotting spot trajectory in simple mode with trajectory shape", traj.shape
+        )
 
-        if traj.shape[-1] == 13:
+        # get state only
+        traj = traj[:, :state_dim]
+
+        if encode_angle:
             traj = decode_angles(traj, 2)
 
         assert traj.shape[-1] == 12, f"Expected 12 states, got {traj.shape[-1]} states"
@@ -353,7 +378,9 @@ def plot_spot_trajectory(
         n_cols = 1
 
         fig, axes = plt.subplots(
-            nrows=n_rows + n_rows_extra, ncols=n_cols, figsize=(scale_factor * 8, scale_factor * 10)
+            nrows=n_rows + n_rows_extra,
+            ncols=n_cols,
+            figsize=(scale_factor * 8, scale_factor * 10),
         )
         fig.tight_layout(pad=2.0)
 
@@ -470,7 +497,11 @@ def plot_spot_trajectory(
                 goal_pos = data[:, -3:]
                 distance = np.linalg.norm(ee_pos - goal_pos, axis=1)
                 time_steps = np.arange(data.shape[0])
-                ax3.plot(time_steps, distance, label = f"EE-Goal Distance" if idx == 0 else None)
+                ax3.plot(
+                    time_steps,
+                    distance,
+                    label=f"EE-Goal Distance" if idx == 0 else None,
+                )
             ax3.set_title("EE-Goal Distance")
             ax3.set_xlabel("Time Step")
             ax3.set_ylabel("Distance [m]")
@@ -484,7 +515,11 @@ def plot_spot_trajectory(
                 base_pos = data[:, 0:3]
                 distance = np.linalg.norm(ee_pos - base_pos, axis=1)
                 time_steps = np.arange(data.shape[0])
-                ax4.plot(time_steps, distance, label=f"EE-Base Distance" if idx == 0 else None)
+                ax4.plot(
+                    time_steps,
+                    distance,
+                    label=f"EE-Base Distance" if idx == 0 else None,
+                )
             ax4.set_title("EE-Base Distance")
             ax4.set_xlabel("Time Step")
             ax4.set_ylabel("Distance [m]")
@@ -816,7 +851,7 @@ if __name__ == "__main__":
     # test sample_pos_and_goal_spot
     rng_key = jax.random.PRNGKey(0)
     domain_lower = jnp.array(
-        [   
+        [
             # base pos
             -2.5,
             -2.5,
@@ -924,7 +959,9 @@ if __name__ == "__main__":
         x, y, theta = init_states[i, 0], init_states[i, 1], init_states[i, 2]
         dx, dy = 0.5 * jnp.cos(theta), 0.5 * jnp.sin(theta)
         if i == 0:
-            axes.quiver(x, y, dx, dy, scale=6, color="black", width=0.005, label="heading")
+            axes.quiver(
+                x, y, dx, dy, scale=6, color="black", width=0.005, label="heading"
+            )
         else:
             axes.quiver(x, y, dx, dy, scale=6, color="black", width=0.005)
     axes.set_xlabel("x")

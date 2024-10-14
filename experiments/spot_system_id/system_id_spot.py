@@ -68,8 +68,8 @@ def extra_eval_learned_model(
     ), [os.path.basename(f).split(".")[0] for f in eval_trajectories_paths]
 
     # extra evaluation settings
-    action_delay_base = 2
-    action_delay_ee = 1
+    action_delay_base = 0
+    action_delay_ee = 0
     step_range = min(200, min([traj[0].shape[0] for traj in eval_trajectories]))
     state_labels = [
         "base_x",
@@ -340,6 +340,7 @@ def run_spot_system_id(
     weights: jnp.array,
     encode_angle: bool = False,
     num_offline_collected_transitions: int = 5000,
+    num_sim_fitting_steps: int = 40_000,
     rng_key: jnp.array = jax.random.PRNGKey(0),
     test_data_ratio: float = 0.1,
     wandb_logging: bool = True,
@@ -353,8 +354,8 @@ def run_spot_system_id(
         window_size=10,
         encode_angles: bool = False,
         angle_idx: int = 2,
-        action_delay_base: int = 2,
-        action_delay_ee: int = 1,
+        action_delay_base: int = 0,
+        action_delay_ee: int = 0,
     ):
         x, u, _ = dataset
 
@@ -686,7 +687,7 @@ def run_spot_system_id(
         return loss, params, opt_state
 
     # run optimization
-    for i in range(40_000):
+    for i in range(num_sim_fitting_steps):
         key_train, subkey = jax.random.split(key_train)
         loss, params, opt_state = step(params, opt_state, subkey)
 
@@ -713,6 +714,7 @@ def execute_spot_system_id(
     num_offline_collected_transitions: int,
     test_data_ratio: float,
     wandb_logging: bool,
+    num_sim_fitting_steps: int = 40_000,
     default_option: str = "alpha_beta_vel",
 ) -> Dict:
 
@@ -773,6 +775,7 @@ def execute_spot_system_id(
             num_offline_collected_transitions=num_offline_collected_transitions,
             rng_key=jax.random.PRNGKey(random_seed),
             test_data_ratio=test_data_ratio,
+            num_sim_fitting_steps=num_sim_fitting_steps,
             wandb_logging=wandb_logging,
         )
         saved_params[key] = params

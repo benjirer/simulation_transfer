@@ -9,7 +9,7 @@ from mbpo.systems.dynamics.base_dynamics import Dynamics
 
 from sim_transfer.models.abstract_model import BatchedNeuralNetworkModel
 from sim_transfer.sims.car_system import CarReward, CarRewardParams, SystemState
-from sim_transfer.sims.spot_system_goal import SpotReward, SpotRewardParams
+from sim_transfer.sims.spot_system import SpotReward, SpotRewardParams
 
 
 @chex.dataclass
@@ -138,28 +138,40 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         model: BatchedNeuralNetworkModel,
         include_noise: bool = True,
         predict_difference: bool = True,
+        num_frame_stack: int = 0,
         dim_goal: int = 3,
     ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
         self.include_noise = include_noise
         self.predict_difference = predict_difference
-        self._x_dim = x_dim
+        self.num_frame_stack = num_frame_stack
+        self._x_dim = x_dim - u_dim * num_frame_stack
         self._u_dim = u_dim
         self._dim_goal = dim_goal
+        self._x_dim_no_goal = self._x_dim - self._dim_goal
 
     def next_state(
         self, x_raw: chex.Array, u: chex.Array, dynamics_params: DynamicsParams
     ) -> Tuple[Distribution, DynamicsParams]:
-        assert x_raw.shape == (self._x_dim,) and u.shape == (self._u_dim,)
+        assert x_raw.shape == (
+            self._x_dim + self._u_dim * self.num_frame_stack,
+        ) and u.shape == (self._u_dim,)
 
         # remove goal from state
         print("x_raw shape", x_raw.shape)
-        x = x_raw[:-self._dim_goal]
+        x_raw_unaugmented = x_raw[: self.x_dim]
+        frame_stack = x_raw[self.x_dim : self.x_dim + self._u_dim * self.num_frame_stack]
+        goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim]
+        x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal]
+        x = jnp.concatenate([x_unaugmented_no_goal, frame_stack])
         print("x shape", x.shape)
-        goal = x_raw[-self._dim_goal:]
-        _x_dim_no_goal = self._x_dim - self._dim_goal
-        assert x.shape == (_x_dim_no_goal,) and goal.shape == (self._dim_goal,)
+        assert x.shape == (
+            self._x_dim_no_goal + self._u_dim * self.num_frame_stack,
+        ), "x shape is wrong, expected {}, got {}".format(
+            (self._x_dim_no_goal + self._u_dim * self.num_frame_stack,), x.shape
+        )
+        assert goal.shape == (self._dim_goal,)
 
         # create state-action pair
         z = jnp.concatenate([x, u])
@@ -170,15 +182,23 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         if self.predict_difference:
             delta_x_dist = self.model.predict_dist(z, include_noise=self.include_noise)
             delta_x = delta_x_dist.sample(seed=key_sample_x_next)
-            _x = x[: _x_dim_no_goal]
-            _x_next = _x + delta_x.reshape((_x_dim_no_goal,))
+            _x = x[: self._x_dim_no_goal]
+            _x_next = _x + delta_x.reshape((self._x_dim_no_goal,))
         else:
             x_next_dist = self.model.predict_dist(z, include_noise=self.include_noise)
             _x_next = x_next_dist.sample(seed=key_sample_x_next)
-            _x_next = _x_next.reshape((_x_dim_no_goal,))
+            _x_next = _x_next.reshape((self._x_dim_no_goal,))
 
         # add goal back to state
-        x_next = jnp.concatenate([_x_next, goal])
+        _x_next = jnp.concatenate([_x_next, goal])
+
+        if self.num_frame_stack > 0:
+            # update last num_frame_stack actions
+            _us = x[self._x_dim :]
+            new_us = jnp.concatenate([_us[self._u_dim :], u])
+            x_next = jnp.concatenate([_x_next, new_us])
+        else:
+            x_next = _x_next
 
         new_dynamics_params = dynamics_params.replace(key=next_key)
         return Normal(loc=x_next, scale=jnp.zeros_like(x_next)), new_dynamics_params
@@ -193,19 +213,24 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
         model: BatchedNeuralNetworkModel,
         include_noise: bool,
         predict_difference: bool,
+        num_frame_stack: int = 0,
         dim_goal: int = 3,
         **spot_reward_kwargs: dict
     ):
-        reward = SpotReward(**spot_reward_kwargs, dim_goal=dim_goal)
+        reward = SpotReward(
+            **spot_reward_kwargs, num_frame_stack=num_frame_stack, dim_goal=dim_goal
+        )
         dynamics = LearnedSpotDynamics(
-            x_dim=reward.x_dim,
+            x_dim=reward.x_dim + num_frame_stack * reward.u_dim,
             u_dim=reward.u_dim,
             dim_goal=dim_goal,
             model=model,
             include_noise=include_noise,
             predict_difference=predict_difference,
+            num_frame_stack=num_frame_stack,
         )
         System.__init__(self, dynamics=dynamics, reward=reward)
+        self.num_frame_stack = num_frame_stack
         self._x_dim = reward.x_dim
         self._u_dim = reward.u_dim
         self._dim_goal = dim_goal
@@ -224,7 +249,9 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
         u: chex.Array,
         system_params: SystemParams[DynamicsParams, SpotRewardParams],
     ) -> SystemState:
-        assert x.shape == (self._x_dim,) and u.shape == (self._u_dim,)
+        assert x.shape == (
+            self._x_dim + self.num_frame_stack * self._u_dim,
+        ) and u.shape == (self._u_dim,)
 
         # handle keys
         new_key, key_x_next, key_reward = jr.split(system_params.key, 3)

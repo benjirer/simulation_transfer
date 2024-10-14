@@ -413,6 +413,7 @@ def _prepare_spot_datasets(
         )
 
         x = jnp.concatenate([x, goal], axis=-1)
+        y = jnp.concatenate([y, goal], axis=-1)
 
     # concatenate state and action
     x_data = jnp.concatenate([x, u], axis=-1)  # current state + action
@@ -423,7 +424,6 @@ def _prepare_spot_datasets(
     assert (
         x_data.shape[1]
         - 6 * (max(action_delay_base, action_delay_ee) * int(action_stacking) + 1)
-        - int(add_goal) * 3
         == y_data.shape[1]
     )
 

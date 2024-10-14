@@ -8,72 +8,65 @@ import random
 def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
     random.seed(0)
-    random_seed = random.sample(range(1, 1_000_000), 3)
-    random_seed = [0]
-    num_offline_collected_transitions = [1000, 2500, 5000]
-    num_offline_collected_transitions = [5000]
+    # random_seed = random.sample(range(1, 1_000_000), 3)
+    random_seed = [42, 9126, 1913244]
+    random_seed = [42]
+    num_offline_collected_transitions = [800, 2500, 5400]
+    # num_offline_collected_transitions = [3000]
 
     parameters = {
         # parameters general
+        "num_frame_stack": [0],
         "random_seed": random_seed,
         "num_offline_collected_transitions": num_offline_collected_transitions,
-        "test_data_ratio": [0.1],
+        "test_data_ratio": [0.0],
         "wandb_logging": [True],
-        "project_name": ["jitter_testing"],
+        "project_name": ["policy_testing_partial_v3"],
+        "obtain_consecutive_data": [1],
+        "save_traj_local": [False],
     }
 
-    parameters_sac = {
-        # parameters sac
+    parameters_rl = {
+        # parameters rl
         "horizon_len": [150],
         "sac_num_env_steps": [2_000_000],
         "best_policy": [1],
         "margin_factor": [5.0],
-        "ctrl_cost_weight": [0.005],
+        "ctrl_cost_weight": [0.01],
         "ctrl_diff_weight": [0.01],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [0],
         "eval_on_all_offline_data": [1],
         "train_sac_only_from_init_states": [0],
-        "obtain_consecutive_data": [0],
-        "save_traj_local": [True],
     }
 
-    parameters_bnn = {
+    parameters_model = {
         # model parameters
         "learnable_likelihood_std": ["yes"],
         "include_aleatoric_noise": [1],
         "best_bnn_model": [1],
-        "predict_difference": [0],
+        "predict_difference": [1],
         "use_sim_prior": [1] if model == "bnn-sim-fsvgd" else [0],
-        "use_grey_box": [0],
-        "use_sim_model": [0],
-        "num_measurement_points": [32],
+        "use_sim_model": [1] if model == "sim-model" else [0],
+        "num_measurement_points": [64],
         "bnn_batch_size": [32],
         "likelihood_exponent": [1.0],
         "bandwidth_svgd": [5.0],
-        "num_epochs": [3],
+        "num_epochs": [70],
         "max_train_steps": [150_000],
         "min_train_steps": [10_000],
+        "num_sim_fitting_steps": [40_000],
         "length_scale_aditive_sim_gp": [1.0],
         "lr": [1e-3],
     }
 
-    if model == "sim":
-        parameters.update(parameters_sac)
-        script_path = (
-            "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_sim.py"
-            if mode == "euler"
-            else "/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_sim.py"
-        )
-    elif model == "bnn-fsvgd" or model == "bnn-sim-fsvgd":
-        parameters.update(parameters_bnn)
-        script_path = (
-            "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_bnn.py"
-            if mode == "euler"
-            else "/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp_bnn.py"
-        )
-    else:
-        raise ValueError(f"Model {model} not implemented")
+    parameters.update(parameters_rl)
+    parameters.update(parameters_model)
+    script_path = (
+        "/cluster/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp.py"
+        if mode == "euler"
+        else "/home/bhoffman/Documents/MT_FS24/simulation_transfer/experiments/spot_offline_rl_from_recorded_data/exp.py"
+    )
 
     python_path = sys.executable
 
@@ -105,8 +98,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
 if __name__ == "__main__":
     """Experiment settings"""
-    # models = ["sim", "bnn-fsvgd", "bnn-sim-fsvgd"]
-    models = ["bnn-sim-fsvgd"]
+    models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
+    # models = ["bnn-sim-fsvgd", "bnn-fsvgd"]
     mode = "local"
     num_cpus = 1
     num_gpus = 1

@@ -6,7 +6,7 @@ import wandb
 import os
 
 from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
-from sim_transfer.rl.spot_bnn_rl_on_offline_data import RLFromOfflineData
+from sim_transfer.rl.spot_rl_on_offline_data import RLFromOfflineData
 
 # imports for model
 from sim_transfer.models import BNN_FSVGD_SimPrior, BNN_FSVGD, BNNGreyBox
@@ -37,11 +37,11 @@ def experiment(
     best_bnn_model: int,
     predict_difference: int,
     use_sim_prior: int,
-    use_grey_box: int,
     use_sim_model: int,
     num_measurement_points: int,
     bnn_batch_size: int,
     # default parameters
+    num_frame_stack: int = 0,
     eval_on_all_offline_data: int = 1,
     test_data_ratio: float = 0.1,
     default_num_init_points_to_bs_for_sac_learning=1000,
@@ -54,9 +54,18 @@ def experiment(
     num_epochs: int = 50,
     max_train_steps: int = 100_000,
     min_train_steps: int = 40_000,
+    num_sim_fitting_steps: int = 40_000,
     length_scale_aditive_sim_gp: float = 1.0,
     lr: float = 3e-4,
 ):
+    # can only use one model at a time
+    assert not (use_sim_prior and use_sim_model), "Can only use one model at a time"
+
+    # can't use frame stacking with sim model
+    assert not (
+        use_sim_model and num_frame_stack > 0
+    ), "Can't use frame stacking with sim model"
+
     # set parameters
     bnn_train_steps = min(
         num_epochs * num_offline_collected_transitions, max_train_steps
@@ -65,11 +74,10 @@ def experiment(
 
     config_dict = dict(
         use_sim_prior=use_sim_prior,
-        use_grey_box=use_grey_box,
+        use_sim_model=use_sim_model,
         num_offline_data=num_offline_collected_transitions,
         share_of_x0s=share_of_x0s_in_sac_buffer,
         sac_only_from_is=train_sac_only_from_init_states,
-        use_sim_model=use_sim_model,
     )
 
     group_name = "_".join(
@@ -121,6 +129,8 @@ def experiment(
     )
 
     config_dict = dict(
+        # parameters general
+        num_frame_stack=num_frame_stack,
         horizon_len=horizon_len,
         random_seed=random_seed,
         sac_num_env_steps=sac_num_env_steps,
@@ -133,12 +143,14 @@ def experiment(
         eval_only_on_init_states=eval_only_on_init_states,
         eval_on_all_offline_data=eval_on_all_offline_data,
         train_sac_only_from_init_states=train_sac_only_from_init_states,
+        obtain_consecutive_data=obtain_consecutive_data,
+        include_aleatoric_noise=include_aleatoric_noise,
+        # parameters model
         bnn_train_steps=bnn_train_steps,
         ll_std=learnable_likelihood_std,
         best_bnn_model=best_bnn_model,
         predict_difference=predict_difference,
         use_sim_prior=use_sim_prior,
-        use_grey_box=use_grey_box,
         use_sim_model=use_sim_model,
         bnn_batch_size=bnn_batch_size,
         num_measurement_points=num_measurement_points,
@@ -147,6 +159,7 @@ def experiment(
         num_epochs=num_epochs,
         max_train_steps=max_train_steps,
         min_train_steps=min_train_steps,
+        num_sim_fitting_steps=num_sim_fitting_steps,
         length_scale_aditive_sim_gp=length_scale_aditive_sim_gp,
         likelihood_exponent=likelihood_exponent,
     )
@@ -172,7 +185,7 @@ def experiment(
 
     # get data and sim
     x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real_with_goal",
+        data_source="spot_real_with_goal_no_delay",
         data_spec={
             "num_samples_train": int(num_offline_collected_transitions),
             "sampling": "consecutive" if obtain_consecutive_data else "iid",
@@ -206,8 +219,37 @@ def experiment(
         "hidden_activation": jax.nn.leaky_relu,
     }
 
+    use_sim_model_org = False
+
+    # for now:
+    if use_sim_model:
+        use_sim_model = False
+        use_sim_model_org = True
+    
+
+    # SIM-MODEL
+    if use_sim_model:
+        # SIM-MODEL is handled inside RLFromOfflineData
+        model = None
+    elif use_sim_model_org:
+        if predict_difference:
+            sim = PredictStateChangeWrapper(sim)
+        base_bnn = BNN_FSVGD(
+            **standard_bnn_params,
+            normalization_stats=sim.normalization_stats,
+            num_train_steps=bnn_train_steps,
+            domain=sim.domain,
+            lr=lr,
+            bandwidth_svgd=bandwidth_svgd,
+        )
+        model = BNNGreyBox(
+            base_bnn=base_bnn,
+            sim=sim,
+            use_base_bnn=False,
+            num_sim_model_train_steps=num_sim_fitting_steps,
+        )
     # SIM-FSVGD
-    if use_sim_prior:
+    elif use_sim_prior:
         OUPUTSCALE_SPOT = [
             0.2,  # base_x
             0.2,  # base_y
@@ -223,6 +265,7 @@ def experiment(
             0.02,  # ee_vy
             0.02,  # ee_vz
         ]
+        # OUPUTSCALE_SPOT = 1.0
         sim = AdditiveSim(
             base_sims=[
                 sim,
@@ -250,22 +293,6 @@ def experiment(
             bandwidth_svgd=bandwidth_svgd,
             num_measurement_points=num_measurement_points,
         )
-    # GREY-BOX
-    elif use_grey_box or use_sim_model:
-        assert use_grey_box == 1 - use_sim_model, "can either use grey box or sim model"
-        if predict_difference:
-            sim = PredictStateChangeWrapper(sim)
-        base_bnn = BNN_FSVGD(
-            **standard_bnn_params,
-            normalization_stats=sim.normalization_stats,
-            num_train_steps=bnn_train_steps,
-            domain=sim.domain,
-            lr=lr,
-            bandwidth_svgd=bandwidth_svgd,
-        )
-        model = BNNGreyBox(
-            base_bnn=base_bnn, sim=sim, use_base_bnn=bool(1 - use_sim_model)
-        )
     # BNN-FSVGD
     else:
         if predict_difference:
@@ -280,6 +307,7 @@ def experiment(
             bandwidth_svgd=bandwidth_svgd,
         )
 
+    # set up RL experiment
     num_init_points_to_bs_for_sac_learning = int(
         num_offline_collected_transitions
         * share_of_x0s_in_sac_buffer
@@ -290,7 +318,6 @@ def experiment(
             default_num_init_points_to_bs_for_sac_learning
         )
 
-    # perform experiment
     rl_from_offline_data = RLFromOfflineData(
         x_train=x_train,
         y_train=y_train,
@@ -300,7 +327,10 @@ def experiment(
         sac_kwargs=SAC_KWARGS,
         spot_reward_kwargs=spot_reward_kwargs,
         return_best_policy=bool(best_policy),
+        num_offline_collected_transitions=num_offline_collected_transitions,
+        num_sim_fitting_steps=num_sim_fitting_steps,
         test_data_ratio=test_data_ratio,
+        num_frame_stack=num_frame_stack,
         eval_sac_only_from_init_states=bool(eval_only_on_init_states),
         num_init_points_to_bs_for_sac_learning=num_init_points_to_bs_for_sac_learning,
         train_sac_only_from_init_states=bool(train_sac_only_from_init_states),
@@ -310,36 +340,184 @@ def experiment(
         predict_difference=bool(predict_difference),
         eval_bnn_model_on_all_offline_data=bool(eval_on_all_offline_data),
     )
-    policy, params, metrics, bnn_model = (
-        rl_from_offline_data.prepare_policy_from_offline_data(
-            bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
+
+    # handle sim model and bnn model seperately
+    if use_sim_model:
+
+        # get policy from offline data
+        policy, params, metrics = (
+            rl_from_offline_data.prepare_policy_from_offline_data_sim()
         )
-    )
 
-    # evaluate learned model
-    rl_from_offline_data.eval_bnn_model_on_test_data(rl_from_offline_data.bnn_model)
+        # evaluate learned sim model
+        rl_from_offline_data.eval_model_on_dedicated_data(spot_learned_params=params)
 
-    # evaluate policy on learned model
-    rl_from_offline_data.evaluate_policy(
-        policy,
-        bnn_model,
-        key=key_evaluation_trained_bnn,
-        num_evals=50,
-        save_traj_dir=f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}" if save_traj_local else None,
-    )
+        # evaluate policy on default sim model
+        rl_from_offline_data.evaluate_policy_on_the_simulator(
+            policy,
+            key=key_evaluation_pretrained_bnn,
+            num_evals=50,
+            save_traj_dir=(
+                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
+                if save_traj_local
+                else None
+            ),
+        )
+    else:
 
-    # evaluate policy on default simulator
-    rl_from_offline_data.evaluate_policy_on_the_simulator(
-        policy,
-        key=key_evaluation_pretrained_bnn,
-        num_evals=50,
-        save_traj_dir=f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}" if save_traj_local else None,
-    )
+        # get policy from offline data
+        policy, params, metrics, bnn_model = (
+            rl_from_offline_data.prepare_policy_from_offline_data_bnn(
+                bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
+            )
+        )
 
-    # # evaluate policy on the pretrained model
-    # rl_from_offline_data.evaluate_policy(
-    #     policy, key=key_evaluation_pretrained_bnn, num_evals=100
-    # )
+        # evaluate learned bnn model
+        rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
+
+        # evaluate policy on learned bnn model
+        rl_from_offline_data.evaluate_policy_bnn(
+            policy,
+            bnn_model,
+            key=key_evaluation_trained_bnn,
+            num_evals=50,
+            save_traj_dir=(
+                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+                if save_traj_local
+                else None
+            ),
+        )
+
+        # evaluate policy on default simulator
+        rl_from_offline_data.evaluate_policy_on_the_simulator(
+            policy,
+            key=key_evaluation_pretrained_bnn,
+            num_evals=50,
+            save_traj_dir=(
+                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+                if save_traj_local
+                else None
+            ),
+        )
+
+        # # evaluate policy on the pretrained model
+        # rl_from_offline_data.evaluate_policy(
+        #     policy, key=key_evaluation_pretrained_bnn, num_evals=100
+        # )
+
+    """For testing/debugging: prepare policy as in real robot and then test"""
+    debugging = False
+    if debugging:
+        # get offline trained agent
+        def get_offline_trained_agent(
+            state_dim: int,
+            action_dim: int,
+            goal_dim: int,
+        ):
+            import pickle
+            import yaml
+
+            # fetch learned policy
+            wandb_api = wandb.Api()
+            project_name = wandb.run.project
+            run_id = run_id = wandb.run.id
+            local_dir = "saved_data"
+
+            if not os.path.exists(local_dir):
+                os.makedirs(local_dir)
+
+            run = wandb_api.run(f"{project_name}/{run_id}")
+            run.file("models/parameters.pkl").download(
+                replace=True, root=os.path.join(local_dir)
+            )
+
+            # get reward config
+            reward_keys = [
+                "encode_angle",
+                "ctrl_cost_weight",
+                "margin_factor",
+                "ctrl_diff_weight",
+            ]
+            reward_config = {}
+            for key in reward_keys:
+                reward_config[key] = run.config[key]
+
+            # save reward config
+            with open(os.path.join(local_dir, "reward_config.yaml"), "w") as file:
+                yaml.dump(reward_config, file)
+
+            # get policy params
+            policy_params = pickle.load(
+                open(os.path.join(local_dir, "models/parameters.pkl"), "rb")
+            )
+
+            # get reward config
+            reward_config = yaml.load(
+                open(os.path.join(local_dir, "reward_config.yaml"), "r"),
+                Loader=yaml.Loader,
+            )
+
+            SAC_KWARGS_TEST = dict(
+                num_timesteps=1_000_000,
+                num_evals=20,
+                reward_scaling=10,
+                episode_length=50,
+                episode_length_eval=2 * 50,
+                action_repeat=1,
+                discounting=0.99,
+                lr_policy=3e-4,
+                lr_alpha=3e-4,
+                lr_q=3e-4,
+                num_envs=64,
+                batch_size=64,
+                grad_updates_per_step=16 * 64,
+                num_env_steps_between_updates=16,
+                tau=0.005,
+                wd_policy=0,
+                wd_q=0,
+                wd_alpha=0,
+                num_eval_envs=2 * 64,
+                max_replay_size=5 * 10**4,
+                min_replay_size=2**11,
+                policy_hidden_layer_sizes=(64, 64),
+                critic_hidden_layer_sizes=(64, 64),
+                normalize_observations=True,
+                deterministic_eval=True,
+                wandb_logging=False,
+            )
+
+            return policy_params, reward_config, SAC_KWARGS_TEST
+
+        state_dim = 13
+        action_dim = 6
+        goal_dim = 3
+
+        policy_params, reward_config, SAC_KWARGS_TEST = get_offline_trained_agent(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            goal_dim=goal_dim,
+        )
+
+        rl_from_offline_data_test = RLFromOfflineData(
+            sac_kwargs=SAC_KWARGS_TEST,
+            x_train=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
+            y_train=jax.numpy.zeros((10, state_dim)),
+            x_test=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
+            y_test=jax.numpy.zeros((10, state_dim)),
+            spot_reward_kwargs=reward_config,
+        )
+        policy_test = rl_from_offline_data_test.prepare_policy_sim(params=policy_params)
+
+        rl_from_offline_data_test.evaluate_policy_on_the_simulator_test(
+            policy_test,
+            key=key_evaluation_pretrained_bnn,
+            num_evals=50,
+            save_traj_dir=(
+                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
+                if save_traj_local
+                else None
+            ),
+        )
 
     if wandb_logging:
         wandb.finish()
@@ -347,7 +525,8 @@ def experiment(
 
 def main(args):
     experiment(
-        # parameters
+        # parameters general
+        num_frame_stack=args.num_frame_stack,
         random_seed=args.random_seed,
         project_name=args.project_name,
         horizon_len=args.horizon_len,
@@ -372,7 +551,6 @@ def main(args):
         predict_difference=args.predict_difference,
         use_sim_prior=args.use_sim_prior,
         use_sim_model=args.use_sim_model,
-        use_grey_box=args.use_grey_box,
         num_measurement_points=args.num_measurement_points,
         bnn_batch_size=args.bnn_batch_size,
         likelihood_exponent=args.likelihood_exponent,
@@ -380,6 +558,7 @@ def main(args):
         num_epochs=args.num_epochs,
         max_train_steps=args.max_train_steps,
         min_train_steps=args.min_train_steps,
+        num_sim_fitting_steps=args.num_sim_fitting_steps,
         length_scale_aditive_sim_gp=args.length_scale_aditive_sim_gp,
         lr=args.lr,
     )
@@ -389,18 +568,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # prevent TF from reserving all GPU memory
-    os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+    os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
-    # parameters
+    # parameters general
+    parser.add_argument("--num_frame_stack", type=int, default=0)
     parser.add_argument("--random_seed", type=int, default=922852)
     parser.add_argument("--horizon_len", type=int, default=120)
-    parser.add_argument("--sac_num_env_steps", type=int, default=2_000_000)
-    parser.add_argument("--project_name", type=str, default="spot_offline_policy")
+    parser.add_argument("--sac_num_env_steps", type=int, default=10_000)
+    parser.add_argument("--project_name", type=str, default="testing")
     parser.add_argument("--best_policy", type=int, default=1)
     parser.add_argument("--margin_factor", type=float, default=5.0)
     parser.add_argument("--ctrl_cost_weight", type=float, default=0.01)
     parser.add_argument("--ctrl_diff_weight", type=float, default=0.01)
-    parser.add_argument("--num_offline_collected_transitions", type=int, default=4_100)
+    parser.add_argument("--num_offline_collected_transitions", type=int, default=5_000)
     parser.add_argument("--test_data_ratio", type=float, default=0.1)
     parser.add_argument("--share_of_x0s_in_sac_buffer", type=float, default=0.5)
     parser.add_argument("--eval_only_on_init_states", type=int, default=0)
@@ -416,7 +596,6 @@ if __name__ == "__main__":
     parser.add_argument("--best_bnn_model", type=int, default=1)
     parser.add_argument("--predict_difference", type=int, default=0)
     parser.add_argument("--use_sim_prior", type=int, default=1)
-    parser.add_argument("--use_grey_box", type=int, default=0)
     parser.add_argument("--use_sim_model", type=int, default=0)
     parser.add_argument("--num_measurement_points", type=int, default=32)
     parser.add_argument("--bnn_batch_size", type=int, default=32)
@@ -425,6 +604,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", type=int, default=10)
     parser.add_argument("--max_train_steps", type=int, default=100_000)
     parser.add_argument("--min_train_steps", type=int, default=10_000)
+    parser.add_argument("--num_sim_fitting_steps", type=int, default=40_000)
     parser.add_argument("--length_scale_aditive_sim_gp", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=1e-3)
     args = parser.parse_args()

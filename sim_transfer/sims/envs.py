@@ -309,32 +309,31 @@ class SpotEnvReward:
         self,
         encode_angle: bool = False,
         ctrl_cost_weight: float = 0.005,
-        ctrl_diff_weight: float = 0.01,
-        ee_body_reward_weight: float = 0.1,
         bound: float = 0.1,
         margin_factor: float = 10.0,
-        base_linear_action_cost_weight: float = 1.0,
-        base_theta_action_cost_weight: float = 1.0,
-        ee_action_cost_weight: float = 0.5,
-        only_ee_goal: bool = True,
+        # additional
+        ee_body_reward_weight: float = 0.0,
+        # base_linear_action_cost_weight: float = 1.0,
+        # base_theta_action_cost_weight: float = 1.0,
+        # ee_action_cost_weight: float = 1.0,
         dim_goal: int = 3,
     ):
-        self.ctrl_cost_weight = ctrl_cost_weight
-        self.ctrl_diff_weight = ctrl_diff_weight
-        self.ee_body_reward_weight = ee_body_reward_weight
-        self.base_linear_action_cost_weight = base_linear_action_cost_weight
-        self.base_theta_action_cost_weight = base_theta_action_cost_weight
-        self.only_ee_goal = only_ee_goal
-        self.ee_action_cost_weight = ee_action_cost_weight
         self.encode_angle = encode_angle
-        self.dim_goal = dim_goal
+        self.ctrl_cost_weight = ctrl_cost_weight
         self.tolerance_reward = ToleranceReward(
             bounds=(0.0, bound),
             margin=margin_factor * bound,
             value_at_margin=0.1,
             sigmoid="long_tail",
         )
-        self.tolerance_reward_distance = ToleranceReward(
+
+        # additional
+        self.ee_body_reward_weight = ee_body_reward_weight
+        # self.base_linear_action_cost_weight = base_linear_action_cost_weight
+        # self.base_theta_action_cost_weight = base_theta_action_cost_weight
+        # self.ee_action_cost_weight = ee_action_cost_weight
+        self.dim_goal = dim_goal
+        self.tolerance_reward_ee_base_distance = ToleranceReward(
             bounds=(0.0, 1.3),
             margin=1.0 * 1.3,
             value_at_margin=0.1,
@@ -346,39 +345,35 @@ class SpotEnvReward:
         obs: jnp.array,
         action: jnp.array,
         next_obs: jnp.array,
-        prev_action: jnp.array = None,
     ):
         """Computes the reward for the given transition"""
-        goal = next_obs[..., -self.dim_goal :]
-        assert (
-            goal.shape[-1] == self.dim_goal
-        ), f"Goal shape {goal.shape} must be {self.dim_goal}"
 
         # reward for reaching the goal
-        state_reward = self.state_reward(next_obs, goal)
+        state_reward = self.state_reward(obs, next_obs)
 
         # action cost
-        base_linear_action_cost, base_theta_action_cost, ee_action_cost = (
+        base_linear_action_cost, base_theta_action_cost, ee_action_cost, total_action_cost = (
             self.action_cost(action)
         )
-        action_cost = (
-            self.base_linear_action_cost_weight * base_linear_action_cost
-            + self.base_theta_action_cost_weight * base_theta_action_cost
-            + self.ee_action_cost_weight * ee_action_cost
-        )
+        # action_cost = (
+        #     self.base_linear_action_cost_weight * base_linear_action_cost
+        #     + self.base_theta_action_cost_weight * base_theta_action_cost
+        #     + self.ee_action_cost_weight * ee_action_cost
+        # )
+        action_cost = total_action_cost
+
+        # action difference cost
+        action_diff_cost = self.action_difference_cost(next_obs, action)
 
         # reward for staying within ee-body distance constraint
-        ee_body_reward =  self.ee_body_reward(next_obs)
-
-        # action difference reward
-        action_diff_reward = self.action_diff_reward(action, prev_action)
+        ee_body_reward = self.ee_body_reward(next_obs)
 
         # total reward
         reward = (
             state_reward
             + self.ctrl_cost_weight * action_cost
+            + 0.1 * action_diff_cost
             + self.ee_body_reward_weight * ee_body_reward
-            + self.ctrl_diff_weight * action_diff_reward
         )
         return reward
 
@@ -388,13 +383,32 @@ class SpotEnvReward:
         base_linear_action_cost = -(action[:2] ** 2).sum(-1)
         base_theta_action_cost = -(action[2] ** 2)
         ee_action_cost = -(action[3:] ** 2).sum(-1)
-        return base_linear_action_cost, base_theta_action_cost, ee_action_cost
+        total_action_cost = -(action ** 2).sum(-1)
+        return base_linear_action_cost, base_theta_action_cost, ee_action_cost, total_action_cost
 
-    def action_diff_reward(
-        self, action: jnp.array, prev_action: jnp.array
-    ) -> jnp.array:
-        """Computes the reward for the difference between the current and previous action"""
-        return -jnp.sum((action - prev_action) ** 2) if prev_action is not None else 0.0
+    def state_reward(self, obs: jnp.array, next_obs: jnp.array) -> jnp.array:
+        """Computes the reward for the given observations"""
+        if self.encode_angle:
+            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+        goal = next_obs[..., 12 : 12 + self.dim_goal]
+        assert (
+            goal.shape[-1] == self.dim_goal
+        ), f"Goal shape {goal.shape} must be {self.dim_goal}"
+        ee_pos_diff = next_obs[..., 6:9] - goal
+        ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
+        reward = self.tolerance_reward(ee_pos_dist)
+        return reward
+    
+    def action_difference_cost(self, next_obs: jnp.array, action: jnp.array) -> jnp.array:
+        """Computes the cost for the difference between current velocity and commanded velocity"""
+        if self.encode_angle:
+            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+        current_base_vel = next_obs[..., 3:6]
+        current_ee_vel = next_obs[..., 9:12]
+        current_vel = jnp.concatenate([current_base_vel, current_ee_vel], axis=-1)
+        action_diff = current_vel - action
+        action_diff_cost = -(action_diff ** 2).sum(-1)
+        return action_diff_cost
 
     def ee_body_reward(self, next_obs: jnp.array) -> jnp.array:
         """Computes the reward for ee-base distance staying within constraint"""
@@ -404,26 +418,10 @@ class SpotEnvReward:
         base_pos = jnp.concatenate([base_pos, jnp.array([0.445])], axis=-1)
         ee_pos = next_obs[..., 6:9]
         ee_base_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos - base_pos), axis=-1))
-        return self.tolerance_reward_distance(ee_base_dist)
+        return self.tolerance_reward_ee_base_distance(ee_base_dist)
 
-    def state_reward(self, next_obs: jnp.array, goal: jnp.array) -> jnp.array:
-        """Computes the reward for the given observations"""
-        if self.encode_angle:
-            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
-        if self.only_ee_goal:
-            ee_pos_diff = next_obs[..., 6:9] - goal
-            ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-            reward = self.tolerance_reward(ee_pos_dist)
-        else:
-            base_pos_diff = next_obs[..., :2] - goal[:2]
-            theta_diff = next_obs[..., 2] - [2]
-            ee_pos_diff = next_obs[..., 6:9] - goal[6:9]
-            base_pos_dist = jnp.sqrt(jnp.sum(jnp.square(base_pos_diff), axis=-1))
-            theta_dist = jnp.abs(((theta_diff + jnp.pi) % (2 * jnp.pi)) - jnp.pi)
-            ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-            total_dist = jnp.sqrt(base_pos_dist**2 + theta_dist**2 + ee_pos_dist**2)
-            reward = self.tolerance_reward(total_dist)
-        return reward
+    def __call__(self, *args, **kwargs):
+        self.forward(*args, **kwargs)
 
 
 class SpotSimEnv:
@@ -437,15 +435,15 @@ class SpotSimEnv:
     def __init__(
         self,
         ctrl_cost_weight: float = 0.005,
+        ctrl_diff_weight: float = 0.01,
         encode_angle: bool = False,
         use_obs_noise: bool = True,
         spot_model_params: dict = None,
         spot_obs_noise_stds: jnp.array = None,
+        action_delay: float = 0.0,
         margin_factor: float = 10.0,
         max_velocity_base: float = 1.0,
         max_velocity_ee: float = 1.0,
-        ctrl_diff_weight: float = 0.0,
-        only_ee_goal: bool = True,
         seed: int = 230492394,
         max_steps: int = 200,
     ):
@@ -454,19 +452,21 @@ class SpotSimEnv:
 
         Args:
             ctrl_cost_weight: weight of the control penalty
+            ctrl_diff_weight: weight of the control difference penalty
             encode_angle: whether to encode the angle as cos(theta), sin(theta)
             use_obs_noise: whether to use observation noise
             spot_model_params: dictionary of spot model parameters that overwrite the default values
             spot_obs_noise_stds: observation noise standard deviations that overwrite the default values
+            action_delay: whether to delay the action by a certain amount of time (in seconds)
             margin_factor: factor to scale the margin of the tolerance reward
             max_velocity: maximum velocity of the spot robot
-            ctrl_diff_weight: weight of the control difference penalty
             max_steps: maximum number of steps
             seed: random number generator seed
         """
-
-        self.dim_state: Tuple[int] = (13,) if encode_angle else (12,)
+        self.ctrl_cost_weight = ctrl_cost_weight
+        self.ctrl_diff_weight = ctrl_diff_weight
         self.encode_angle: bool = encode_angle
+        self.dim_state: Tuple[int] = (13,) if encode_angle else (12,)
         self._rds_key = jax.random.PRNGKey(seed)
         self.max_steps = max_steps
 
@@ -502,16 +502,26 @@ class SpotSimEnv:
             ctrl_cost_weight=ctrl_cost_weight,
             encode_angle=encode_angle,
             margin_factor=margin_factor,
-            only_ee_goal=only_ee_goal,
         )
 
-        # set up action buffer
-        self._action_buffer = jnp.zeros((1, self.dim_action[0]))
+        # set up action delay
+        assert action_delay >= 0.0, "Action delay must be non-negative"
+        self.action_delay = action_delay
+        if abs(action_delay % self._dt) < 1e-8:
+            self._act_delay_interpolation_weights = jnp.array([1.0, 0.0])
+        else:
+            # if action delay is not a multiple of dt, compute weights to interpolate
+            # between temporally closest actions
+            weight_first = (action_delay % self._dt) / self._dt
+            self._act_delay_interpolation_weights = jnp.array(
+                [weight_first, 1.0 - weight_first]
+            )
+        action_delay_buffer_size = int(jnp.ceil(action_delay / self._dt)) + 1
+        self._action_buffer = jnp.zeros((action_delay_buffer_size, self.dim_action[0]))
 
         # initialize time and state
         self._time: int = 0
         self._state: jnp.array = jnp.zeros(self.dim_state)
-        self.ctrl_diff_weight = ctrl_diff_weight
 
     def reset(self, rng_key: Optional[jax.random.PRNGKey] = None) -> jnp.array:
         """Resets the environment to a random initial state close to the initial pose"""
@@ -551,56 +561,34 @@ class SpotSimEnv:
         action = action.at[5].set(self.max_velocity_ee * action[5])
         rng_key = self.rds_key if rng_key is None else rng_key
 
-        # get previous action and update action buffer
-        prev_action = self._action_buffer[-1]
-        self._action_buffer = jnp.array([action[None, :]])
+        # handle action delay
+        jitter_reward = jnp.zeros_like(action).sum(-1)
+        if self.action_delay > 0.0:
+            # pushes action to action buffer and pops the oldest action
+            # computes delayed action as a linear interpolation between the relevant actions in the past
+            action, jitter_reward = self._get_delayed_action(action)
 
         # compute next state
+        obs = self._state_to_obs(self._state, rng_key=rng_key)
         self._state = self._next_step_fn(self._state, action)
         self._time += 1
-        obs = self._state_to_obs(self._state, rng_key=rng_key)
-        obs_with_goal = jnp.concatenate([obs, self._goal])
+        next_obs = self._state_to_obs(self._state, rng_key=rng_key)
+        next_obs_with_goal = jnp.concatenate([next_obs, self._goal])
 
         # compute reward
-        reward = self._reward_model.forward(
-            obs=None, action=action, next_obs=obs_with_goal, prev_action=prev_action
+        reward = (
+            self._reward_model.forward(
+                obs=obs, action=action, next_obs=next_obs_with_goal
+            )
+            + jitter_reward
         )
 
         # check if done
-        # ee_pos = obs[..., 7:10] if self.encode_angle else obs[..., 6:9]
-        # base_pos = obs[..., :2]
-
-        # # goal reached
-        # ee_distance = jnp.linalg.norm(ee_pos - self._goal)
-        # ee_goal_threshold = 0.05
-        # reached_goal = ee_distance < ee_goal_threshold
-
-        # # spot in bounds
-        # ee_out_of_bounds = jnp.logical_or(
-        #     jnp.any(ee_pos < self._domain_lower[6:9]),
-        #     jnp.any(ee_pos > self._domain_upper[6:9])
-        # )
-
-        # base_out_of_bounds = jnp.logical_or(
-        #     jnp.any(base_pos < self._domain_lower[:2]),
-        #     jnp.any(base_pos > self._domain_upper[:2])
-        # )
-
-        # # time up
-        # time_up = self._time >= self.max_steps
-
-        # done = reduce(jnp.logical_or, [
-        #     reached_goal,
-        #     ee_out_of_bounds,
-        #     base_out_of_bounds,
-        #     time_up
-        # ])
-
         done = self._time >= self.max_steps
 
         # return observation, reward, done, info
         return (
-            obs_with_goal,
+            next_obs_with_goal,
             reward,
             done,
             {
@@ -632,6 +620,22 @@ class SpotSimEnv:
             obs.shape[-1] == 12 and not self.encode_angle
         )
         return obs
+
+    def _get_delayed_action(self, action: jnp.array) -> Tuple[jnp.array, jnp.array]:
+        # push action to action buffer
+        last_action = self._action_buffer[-1]
+        reward = -self.ctrl_diff_weight * jnp.sum((action - last_action) ** 2)
+        self._action_buffer = jnp.concatenate(
+            [self._action_buffer[1:], action[None, :]], axis=0
+        )
+
+        # get delayed action (interpolate between two actions if the delay is not a multiple of dt)
+        delayed_action = jnp.sum(
+            self._action_buffer[:2] * self._act_delay_interpolation_weights[:, None],
+            axis=0,
+        )
+        assert delayed_action.shape == self.dim_action
+        return delayed_action, reward
 
     @property
     def rds_key(self) -> jax.random.PRNGKey:
