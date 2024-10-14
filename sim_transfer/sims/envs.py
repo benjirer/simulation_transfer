@@ -312,7 +312,7 @@ class SpotEnvReward:
         bound: float = 0.1,
         margin_factor: float = 10.0,
         # additional
-        ee_body_reward_weight: float = 0.0,
+        ee_body_reward_weight: float = 0.01,
         # base_linear_action_cost_weight: float = 1.0,
         # base_theta_action_cost_weight: float = 1.0,
         # ee_action_cost_weight: float = 1.0,
@@ -372,7 +372,7 @@ class SpotEnvReward:
         reward = (
             state_reward
             + self.ctrl_cost_weight * action_cost
-            + 0.1 * action_diff_cost
+            + 0.05 * action_diff_cost
             + self.ee_body_reward_weight * ee_body_reward
         )
         return reward

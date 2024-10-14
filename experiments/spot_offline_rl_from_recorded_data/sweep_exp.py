@@ -10,8 +10,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     random.seed(0)
     # random_seed = random.sample(range(1, 1_000_000), 3)
     random_seed = [42, 9126, 1913244]
-    random_seed = [42]
-    num_offline_collected_transitions = [800, 2500, 5400]
+    random_seed = [1913244]
+    num_offline_collected_transitions = [800, 2000, 5000]
     # num_offline_collected_transitions = [3000]
 
     parameters = {
@@ -19,9 +19,9 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "num_frame_stack": [0],
         "random_seed": random_seed,
         "num_offline_collected_transitions": num_offline_collected_transitions,
-        "test_data_ratio": [0.0],
+        "test_data_ratio": [0.1],
         "wandb_logging": [True],
-        "project_name": ["policy_testing_partial_v3"],
+        "project_name": ["policy_testing_partial_v4"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
     }
@@ -32,8 +32,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "sac_num_env_steps": [2_000_000],
         "best_policy": [1],
         "margin_factor": [5.0],
-        "ctrl_cost_weight": [0.01],
-        "ctrl_diff_weight": [0.01],
+        "ctrl_cost_weight": [0.005],
+        "ctrl_diff_weight": [0.1],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [0],
         "eval_on_all_offline_data": [1],
