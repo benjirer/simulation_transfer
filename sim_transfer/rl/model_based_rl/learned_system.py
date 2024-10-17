@@ -158,13 +158,21 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
             self._x_dim + self._u_dim * self.num_frame_stack,
         ) and u.shape == (self._u_dim,)
 
+        # # print dims
+        # print("self.x_dim", self.x_dim)
+        # print("self._x_dim", self._x_dim)
+        # print("self._u_dim", self._u_dim)
+        # print("self.num_frame_stack", self.num_frame_stack)
+        # print("self._dim_goal", self._dim_goal)
+        # print("self._x_dim_no_goal", self._x_dim_no_goal)
+
         # remove goal from state
         print("x_raw shape", x_raw.shape)
-        x_raw_unaugmented = x_raw[: self.x_dim]
-        frame_stack = x_raw[self.x_dim : self.x_dim + self._u_dim * self.num_frame_stack]
-        goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim]
-        x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal]
-        x = jnp.concatenate([x_unaugmented_no_goal, frame_stack])
+        x_raw_unaugmented = x_raw[: self._x_dim] # dim = 16
+        frame_stack = x_raw[self._x_dim : self._x_dim + self._u_dim * self.num_frame_stack] # dim = 12
+        goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim] # dim = 3
+        x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal] # dim = 13
+        x = jnp.concatenate([x_unaugmented_no_goal, frame_stack]) # dim = 13 + 12 = 25
         print("x shape", x.shape)
         assert x.shape == (
             self._x_dim_no_goal + self._u_dim * self.num_frame_stack,
@@ -174,7 +182,7 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         assert goal.shape == (self._dim_goal,)
 
         # create state-action pair
-        z = jnp.concatenate([x, u])
+        z = jnp.concatenate([x, u]) # dim = 25 + 3 = 28
         z = z.reshape((1, -1))
 
         # predict next state
@@ -190,13 +198,13 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
             _x_next = _x_next.reshape((self._x_dim_no_goal,))
 
         # add goal back to state
-        _x_next = jnp.concatenate([_x_next, goal])
+        _x_next = jnp.concatenate([_x_next, goal]) # dim = 16
 
         if self.num_frame_stack > 0:
             # update last num_frame_stack actions
-            _us = x[self._x_dim :]
-            new_us = jnp.concatenate([_us[self._u_dim :], u])
-            x_next = jnp.concatenate([_x_next, new_us])
+            _us = x_raw[self._x_dim :] # dim = 12
+            new_us = jnp.concatenate([_us[self._u_dim :], u]) # dim = 12
+            x_next = jnp.concatenate([_x_next, new_us]) # dim = 16 + 12 = 28
         else:
             x_next = _x_next
 

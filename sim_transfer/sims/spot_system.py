@@ -251,7 +251,9 @@ class SpotReward(Reward[SpotRewardParams]):
         assert x.shape == (
             self.x_dim + self.num_frame_stack * self.u_dim,
         ) and u.shape == (self.u_dim,)
-        assert x_next.shape == (self.x_dim + self.num_frame_stack * self.u_dim,)
+        assert x_next.shape == (
+            self.x_dim + self.num_frame_stack * self.u_dim,
+        ), f"Expected shape {self.x_dim + self.num_frame_stack * self.u_dim} but got {x_next.shape}"
 
         # split into state and stacked actions
         x_state_with_goal, actions_stacked = x[: self.x_dim], x[self.x_dim :]
@@ -265,8 +267,10 @@ class SpotReward(Reward[SpotRewardParams]):
 
         # cost for control input change
         if self.num_frame_stack > 0:
-            u_prev = actions_stacked[-self.u_dim :]
-            reward -= self.ctrl_diff_weight * jnp.sum((u_prev - u) ** 2)
+            u_prev = actions_stacked[-self.u_dim :]          
+            u_base_penalty = self.ctrl_diff_weight * jnp.sum((u[:3] - u_prev[:3]) ** 2)
+            u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:6] - u_prev[3:6]) ** 2)
+            reward -= 2.0 * u_base_penalty + 0.5 * u_ee_penalty
         return Normal(reward, jnp.zeros_like(reward)), reward_params
 
 

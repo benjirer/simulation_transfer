@@ -15,29 +15,21 @@ from jax.lax import scan
 from mbpo.optimizers.policy_optimizers.sac.sac import SAC
 from mbpo.systems.brax_wrapper import BraxWrapper
 
-# default imports
 from sim_transfer.sims.spot_system import SpotSystem
 from sim_transfer.sims.envs import SpotSimEnv
 from sim_transfer.sims.simulators import SpotSim
 from sim_transfer.sims.util import plot_spot_trajectory
 from sim_transfer.sims.util import decode_angles
-
-# sim model imports
-from experiments.spot_system_id.system_id_spot import extra_eval_learned_model
-from experiments.spot_system_id.system_id_spot import execute_spot_system_id
-
-# bnn model imports
 from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
 from sim_transfer.models.abstract_model import BatchedNeuralNetworkModel
 from sim_transfer.models.bnn_svgd import BNN_SVGD
 from sim_transfer.rl.model_based_rl.learned_system import LearnedSpotSystem
-
-# extra eval imports
 from experiments.data_provider import _load_spot_datasets
 from sim_transfer.sims.dynamics_models import SpotParams
-from sim_transfer.sims.util import angle_diff, delay_and_stack_spot_actions
+from sim_transfer.sims.util import angle_diff
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
 from sim_transfer.sims.util import decode_angles as decode_angles_fn
+from experiments.data_provider import delay_and_stack_spot_actions
 
 
 class RLFromOfflineData:
@@ -146,6 +138,11 @@ class RLFromOfflineData:
             :, self.state_dim_with_goal : self.state_dim_with_goal_frame_stacked
         ]
 
+        if self.num_frame_stack > 0:
+            next_framestacked_actions = x_train[:, self.state_dim_with_goal + self.action_dim :]
+        else:
+            next_framestacked_actions = framestacked_actions
+
         # prepare transitions
         rewards = jnp.zeros(shape=(x_train.shape[0],))
         discounts = 0.99 * jnp.ones(shape=(x_train.shape[0],))
@@ -154,7 +151,9 @@ class RLFromOfflineData:
             action=last_actions,
             reward=rewards,
             discount=discounts,
-            next_observation=jnp.concatenate([next_state_obs, framestacked_actions], axis=-1),
+            next_observation=jnp.concatenate(
+                [next_state_obs, next_framestacked_actions], axis=-1
+            ),
         )
 
         # create a dummy sample to init the buffer
@@ -269,7 +268,7 @@ class RLFromOfflineData:
             self.y_eval = self.y_eval - self.x_eval[..., : self.state_dim]
             self.y_test = self.y_test - self.x_test[..., : self.state_dim]
 
-    """==================================== GENERAL FUNCTIONS ===================================="""
+    """============== Model training function =============="""
 
     @staticmethod
     def shuffle_and_split_data(x_data, y_data, test_ratio, key: chex.PRNGKey):
@@ -296,6 +295,58 @@ class RLFromOfflineData:
 
         return x_train, y_train, x_test, y_test
 
+    def train_model(
+        self, bnn_train_steps: int, return_best_bnn: bool = True
+    ) -> BNN_SVGD:
+        """Train selected model on the collected data."""
+
+        # get data
+        x_train, y_train, x_eval, y_eval = (
+            self.x_train,
+            self.y_train,
+            self.x_eval,
+            self.y_eval,
+        )
+        x_test, y_test = self.x_test, self.y_test
+
+        # create bnn model
+        bnn = self.bnn_model
+
+        # set evaluation mode
+        if self.test_data_ratio == 0.0:
+            metrics_objective = "train_nll_loss"
+            x_eval, y_eval = x_test, y_test
+        else:
+            metrics_objective = "eval_nll"
+
+        # confirm shape
+        print(
+            "Training bnn model with:",
+            "x_train.shape",
+            x_train.shape,
+            "y_train.shape",
+            y_train.shape,
+            "x_eval.shape",
+            x_eval.shape,
+            "y_eval.shape",
+            y_eval.shape,
+        )
+
+        # train bnn model
+        bnn.fit(
+            x_train=x_train,
+            y_train=y_train,
+            x_eval=x_eval,
+            y_eval=y_eval,
+            log_to_wandb=True,
+            keep_the_best=return_best_bnn,
+            metrics_objective=metrics_objective,
+            num_steps=bnn_train_steps,
+        )
+        return bnn
+
+    """============== Policy training functions =============="""
+
     def prepare_init_transitions(self, key: chex.PRNGKey, number_of_samples: int):
         """Prepare initial transitions for the buffer."""
         # get simulator
@@ -321,31 +372,168 @@ class RLFromOfflineData:
         )
         return transitions
 
-    """==================================== BNN-MODEL FUNCTIONS ===================================="""
+    def train_policy(
+        self,
+        bnn_model: BatchedNeuralNetworkModel,
+        true_data_buffer_state: ReplayBufferState,
+        key: chex.PRNGKey,
+    ):
+        """Train policy using SAC and BNN-MODEL."""
 
-    """============== Model evaluation functions =============="""
+        # handle keys
+        key_train, key_simulate, key_init_state, *keys_sys_params = jr.split(key, 5)
 
-    def eval_bnn_model_on_test_data(self, bnn_model: BatchedNeuralNetworkModel):
-        """Evaluate BNN-MODEL on test data."""
-
-        # get data
-        x_test, y_test = self.x_test, self.y_test
-
-        # evaluate bnn model
-        test_stats = bnn_model.eval(
-            x_test, y_test, per_dim_metrics=True, prefix="test_data/"
+        # create a learned spot system
+        system = LearnedSpotSystem(
+            model=bnn_model,
+            include_noise=self.include_aleatoric_noise,
+            predict_difference=self.predict_difference,
+            num_frame_stack=self.num_frame_stack,
+            **self.spot_reward_kwargs,
         )
-        if self.wandb_logging:
-            wandb.log(test_stats)
+
+        # add init points to the true_data_buffer
+        key_init_state, key_init_buffer = jr.split(key_init_state)
+        init_transitions = self.prepare_init_transitions(
+            key_init_state, self.num_init_points_to_bs_for_learning
+        )
+
+        # setup training buffer
+        if self.train_sac_only_from_init_states:
+            train_buffer_state = self.true_data_buffer.init(key_init_buffer)
+            train_buffer_state = self.true_data_buffer.insert(
+                train_buffer_state, init_transitions
+            )
+        else:
+            train_buffer_state = self.true_data_buffer.insert(
+                true_data_buffer_state, init_transitions
+            )
+
+        # setup evaluation buffer
+        init_states_bs = train_buffer_state
+        if self.eval_sac_only_from_init_states:
+            init_states_bs = self.true_data_buffer.init(key_init_buffer)
+            init_states_bs = self.true_data_buffer.insert(
+                init_states_bs, init_transitions
+            )
+
+        # create training and eval environments (wrap system and insert buffer and init params)
+        env = BraxWrapper(
+            system=system,
+            sample_buffer_state=train_buffer_state,
+            sample_buffer=self.true_data_buffer,
+            system_params=system.init_params(keys_sys_params[0]),
+        )
+        eval_env = BraxWrapper(
+            system=system,
+            sample_buffer_state=init_states_bs,
+            sample_buffer=self.true_data_buffer,
+            system_params=system.init_params(keys_sys_params[0]),
+        )
+
+        # create SAC trainer
+        _sac_kwargs = self.sac_kwargs
+        sac_trainer = SAC(
+            environment=env,
+            eval_environment=eval_env,
+            eval_key_fixed=True,
+            return_best_model=self.return_best_policy,
+            **_sac_kwargs,
+        )
+
+        # train policy
+        params, metrics = sac_trainer.run_training(key=key_train)
+
+        # get policy function
+        make_inference_fn = sac_trainer.make_policy
+
+        @jit
+        def policy(x):
+            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
+
+        return policy, params, metrics
+
+    def prepare_policy(self, params: Any | None = None, filename: str = None):
+        """Prepare policy function for inference from parameters or file using BNN-MODEL."""
+
+        # load params from file if not provided directly
+        if params is None:
+            with open(filename, "rb") as handle:
+                params = pickle.load(handle)
+
+        # get data (only used for shape)
+        x_train, y_train, x_test, y_test = (
+            self.x_train,
+            self.y_train,
+            self.x_eval,
+            self.y_eval,
+        )
+
+        # create a bnn model
+        standard_model_params = {
+            "input_size": x_train.shape[-1],
+            "output_size": y_train.shape[-1],
+            "rng_key": jr.PRNGKey(234234345),
+            # 'normalization_stats': sim.normalization_stats, TODO: Jonas: adjust sim for normalization stats
+            "likelihood_std": _SPOT_NOISE_STD_ENCODED,
+            "normalize_likelihood_std": True,
+            "learn_likelihood_std": True,
+            "likelihood_exponent": 0.5,
+            "hidden_layer_sizes": [64, 64, 64],
+            "data_batch_size": 32,
+        }
+        bnn = BNN_SVGD(**standard_model_params, bandwidth_svgd=1.0)
+
+        # create learned spot system
+        system = LearnedSpotSystem(
+            model=bnn,
+            include_noise=self.include_aleatoric_noise,
+            predict_difference=self.predict_difference,
+            num_frame_stack=self.num_frame_stack,
+            **self.spot_reward_kwargs,
+        )
+
+        # handle keys
+        key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
+
+        # create env
+        env = BraxWrapper(
+            system=system,
+            sample_buffer_state=self.true_buffer_state,
+            sample_buffer=self.true_data_buffer,
+            system_params=system.init_params(keys_sys_params[0]),
+        )
+
+        # create SAC trainer
+        _sac_kwargs = self.sac_kwargs
+        sac_trainer = SAC(
+            environment=env,
+            eval_environment=env,
+            eval_key_fixed=True,
+            return_best_model=self.return_best_policy,
+            **_sac_kwargs,
+        )
+
+        # get policy function
+        make_inference_fn = sac_trainer.make_policy
+
+        @jit
+        def policy(x):
+            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
+
+        return policy
 
     def eval_bnn_model_on_all_collected_data(
         self, bnn_model: BatchedNeuralNetworkModel
     ):
-        """Evaluate BNN-MODEL on all collected data."""
+        """Evaluate learned model on all collected data."""
 
         # get data
-        data_source: str = "spot_real_no_delay"
-        data_spec: dict = {"num_samples_train": 5_400}
+        data_source: str = "spot_real"
+        data_spec: dict = {
+            "num_samples_train": 5_400,
+            "num_stacked_actions": self.num_frame_stack,
+        }
         x_data, y_data, _, _, sim = provide_data_and_sim(
             data_source=data_source, data_spec=data_spec
         )
@@ -361,9 +549,189 @@ class RLFromOfflineData:
         if self.wandb_logging:
             wandb.log(eval_stats)
 
+    def eval_bnn_model_on_test_data(self, bnn_model: BatchedNeuralNetworkModel):
+        """Evaluate learned model on test data."""
+
+        # get data
+        x_test, y_test = self.x_test, self.y_test
+
+        # evaluate bnn model
+        test_stats = bnn_model.eval(
+            x_test, y_test, per_dim_metrics=True, prefix="test_data/"
+        )
+        if self.wandb_logging:
+            wandb.log(test_stats)
+
+    def prepare_policy_from_offline_data(
+        self, bnn_train_steps: int = 10_000, return_best_bnn: bool = True
+    ):
+        """Prepare policy from offline data using BNN-MODEL."""
+
+        # train bnn model
+        bnn_model = self.train_model(
+            bnn_train_steps=bnn_train_steps, return_best_bnn=return_best_bnn
+        )
+
+        # save bnn model
+        if self.wandb_logging:
+            directory = os.path.join(wandb.run.dir, "models")
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+            model_path = os.path.join("models", "bnn_model.pkl")
+            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
+                pickle.dump(bnn_model, handle)
+            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
+
+        # evaluate bnn model on all collected data
+        if self.evaluate_bnn_model_on_all_collected_data:
+            self.eval_bnn_model_on_all_collected_data(bnn_model)
+
+        # train policy
+        policy, params, metrics = self.train_policy(
+            bnn_model, self.true_buffer_state, self.key
+        )
+
+        # save policy parameters
+        if self.wandb_logging:
+            directory = os.path.join(wandb.run.dir, "models")
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+            model_path = os.path.join("models", "parameters.pkl")
+            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
+                pickle.dump(params, handle)
+            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
+
+        return policy, params, metrics, bnn_model
+
     """============== Policy evaluation functions =============="""
 
-    def evaluate_policy_bnn(
+    @staticmethod
+    def arg_mean(a: chex.Array):
+        """Return index of the element that is closest to the mean."""
+        return jnp.argmin(jnp.abs(a - jnp.mean(a)))
+
+    def evaluate_policy_on_the_simulator(
+        self,
+        policy: Callable,
+        key: chex.PRNGKey = jr.PRNGKey(0),
+        num_evals: int = 1,
+        save_traj_dir: str = None,
+    ):
+        """Evaluate policy on the default SIM-MODEL."""
+
+        # get reward and trajectory on the simulator
+        def reward_on_simulator(key: chex.PRNGKey):
+            # init actions buffer, simulator and get initial observation
+            actions_buffer = jnp.zeros(shape=(self.action_dim * self.num_frame_stack))
+            sim = SpotSimEnv(
+                encode_angle=True,
+                action_delay=1 / 10.0 * self.num_frame_stack,
+                margin_factor=self.spot_reward_kwargs["margin_factor"],
+                ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
+                ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+                max_steps=self.sac_kwargs["episode_length"],
+            )
+            obs = sim.reset(key)
+
+            # use policy on simulator
+            done = False
+            transitions_for_plotting = []
+            while not done:
+                # get action from policy
+                policy_input = jnp.concatenate([obs, actions_buffer], axis=-1)
+                action = policy(policy_input)
+
+                # step simulator
+                next_obs, reward, done, info = sim.step(action)
+
+                # handle action buffer
+                if self.num_frame_stack > 0:
+                    next_actions_buffer = jnp.concatenate(
+                        [actions_buffer[self.action_dim :], action]
+                    )
+                else:
+                    next_actions_buffer = jnp.zeros(shape=(0,))
+
+                transitions_for_plotting.append(
+                    Transition(
+                        observation=obs,
+                        action=action,
+                        reward=jnp.array(reward),
+                        discount=jnp.array(0.99),
+                        next_observation=next_obs,
+                    )
+                )
+                actions_buffer = next_actions_buffer
+                obs = next_obs
+
+            concatenated_transitions_for_plotting = jtu.tree_map(
+                lambda *xs: jnp.stack(xs, axis=0), *transitions_for_plotting
+            )
+            reward_on_simulator = jnp.sum(concatenated_transitions_for_plotting.reward)
+            return reward_on_simulator, concatenated_transitions_for_plotting
+
+        # get rewards and trajectories
+        rewards, trajectories = vmap(reward_on_simulator)(jr.split(key, num_evals))
+
+        # get mean and std of rewards
+        reward_mean = jnp.mean(rewards)
+        reward_std = jnp.std(rewards)
+
+        # get trajectory with mean reward
+        reward_mean_index = self.arg_mean(rewards)
+        trajectory_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
+
+        # plot trajectory evaluation
+        fig_eval, _ = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            state_dim=13,
+            plot_mode="transitions_eval_full",
+        )
+
+        # plot trajectory ee-goal distance
+        fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
+            trajectories,
+            encode_angle=True,
+            state_dim=13,
+            plot_mode="transitions_distance_eval",
+        )
+
+        if self.wandb_logging:
+            model_name = "default_sim_model"
+            wandb.log(
+                {
+                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                    f"mean_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps
+                    ),
+                    f"reward_mean_on_{model_name}": float(reward_mean),
+                    f"reward_std_on_{model_name}": float(reward_std),
+                }
+            )
+            plt.close("all")
+
+        # save trajectories
+        if save_traj_dir is not None:
+            model_name = "default_sim_model"
+            save_traj_dir = os.path.join(save_traj_dir, model_name)
+
+            # save trajectories
+            if not os.path.exists(save_traj_dir):
+                os.makedirs(save_traj_dir)
+            with open(
+                os.path.join(save_traj_dir, "trajectories_all.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectories, handle)
+            with open(
+                os.path.join(save_traj_dir, "trajectory_mean.pkl"), "wb"
+            ) as handle:
+                pickle.dump(trajectory_mean, handle)
+
+            print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
+
+    def evaluate_policy(
         self,
         policy: Callable,
         bnn_model: BatchedNeuralNetworkModel | None = None,
@@ -371,7 +739,7 @@ class RLFromOfflineData:
         num_evals: int = 1,
         save_traj_dir: str = None,
     ):
-        """Evaluate policy on the learned BNN-MODEL."""
+        """Evaluate policy on the learned model"""
 
         # set parameters
         eval_horizon = self.sac_kwargs["episode_length"]
@@ -494,449 +862,6 @@ class RLFromOfflineData:
 
             print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
 
-    """============== Model training function =============="""
-
-    def train_bnn_model(
-        self, bnn_train_steps: int, return_best_bnn: bool = True
-    ) -> BNN_SVGD:
-        """Train selected BNN-MODEL on the collected data."""
-
-        # get data
-        x_train, y_train, x_eval, y_eval = (
-            self.x_train,
-            self.y_train,
-            self.x_eval,
-            self.y_eval,
-        )
-        x_test, y_test = self.x_test, self.y_test
-
-        # create bnn model
-        bnn = self.bnn_model
-
-        # set evaluation mode
-        if self.test_data_ratio == 0.0:
-            metrics_objective = "train_nll_loss"
-            x_eval, y_eval = x_test, y_test
-        else:
-            metrics_objective = "eval_nll"
-
-        # confirm shape
-        print(
-            "Training bnn model with:",
-            "x_train.shape",
-            x_train.shape,
-            "y_train.shape",
-            y_train.shape,
-            "x_eval.shape",
-            x_eval.shape,
-            "y_eval.shape",
-            y_eval.shape,
-        )
-
-        # train bnn model
-        bnn.fit(
-            x_train=x_train,
-            y_train=y_train,
-            x_eval=x_eval,
-            y_eval=y_eval,
-            log_to_wandb=True,
-            keep_the_best=return_best_bnn,
-            metrics_objective=metrics_objective,
-            num_steps=bnn_train_steps,
-        )
-        return bnn
-
-    """============== Policy training functions =============="""
-
-    def train_policy_bnn(
-        self,
-        bnn_model: BatchedNeuralNetworkModel,
-        true_data_buffer_state: ReplayBufferState,
-        key: chex.PRNGKey,
-    ):
-        """Train policy using SAC and BNN-MODEL."""
-
-        # handle keys
-        key_train, key_simulate, key_init_state, *keys_sys_params = jr.split(key, 5)
-
-        # create a learned spot system
-        system = LearnedSpotSystem(
-            model=bnn_model,
-            include_noise=self.include_aleatoric_noise,
-            predict_difference=self.predict_difference,
-            num_frame_stack=self.num_frame_stack,
-            **self.spot_reward_kwargs,
-        )
-
-        # add init points to the true_data_buffer
-        key_init_state, key_init_buffer = jr.split(key_init_state)
-        init_transitions = self.prepare_init_transitions(
-            key_init_state, self.num_init_points_to_bs_for_learning
-        )
-
-        # setup training buffer
-        if self.train_sac_only_from_init_states:
-            train_buffer_state = self.true_data_buffer.init(key_init_buffer)
-            train_buffer_state = self.true_data_buffer.insert(
-                train_buffer_state, init_transitions
-            )
-        else:
-            train_buffer_state = self.true_data_buffer.insert(
-                true_data_buffer_state, init_transitions
-            )
-
-        # setup evaluation buffer
-        init_states_bs = train_buffer_state
-        if self.eval_sac_only_from_init_states:
-            init_states_bs = self.true_data_buffer.init(key_init_buffer)
-            init_states_bs = self.true_data_buffer.insert(
-                init_states_bs, init_transitions
-            )
-
-        # create training and eval environments (wrap system and insert buffer and init params)
-        env = BraxWrapper(
-            system=system,
-            sample_buffer_state=train_buffer_state,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-        eval_env = BraxWrapper(
-            system=system,
-            sample_buffer_state=init_states_bs,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-
-        # create SAC trainer
-        _sac_kwargs = self.sac_kwargs
-        sac_trainer = SAC(
-            environment=env,
-            eval_environment=eval_env,
-            eval_key_fixed=True,
-            return_best_model=self.return_best_policy,
-            **_sac_kwargs,
-        )
-
-        # train policy
-        params, metrics = sac_trainer.run_training(key=key_train)
-
-        # get policy function
-        make_inference_fn = sac_trainer.make_policy
-
-        @jit
-        def policy(x):
-            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
-
-        return policy, params, metrics
-
-    """============== Preparation functions =============="""
-
-    def prepare_policy_bnn(self, params: Any | None = None, filename: str = None):
-        """Prepare policy function for inference from parameters or file using BNN-MODEL."""
-
-        # load params from file if not provided directly
-        if params is None:
-            with open(filename, "rb") as handle:
-                params = pickle.load(handle)
-
-        # get data (only used for shape)
-        x_train, y_train, x_test, y_test = (
-            self.x_train,
-            self.y_train,
-            self.x_eval,
-            self.y_eval,
-        )
-
-        # create a bnn model
-        standard_model_params = {
-            "input_size": x_train.shape[-1],
-            "output_size": y_train.shape[-1],
-            "rng_key": jr.PRNGKey(234234345),
-            # 'normalization_stats': sim.normalization_stats, TODO: Jonas: adjust sim for normalization stats
-            "likelihood_std": _SPOT_NOISE_STD_ENCODED,
-            "normalize_likelihood_std": True,
-            "learn_likelihood_std": True,
-            "likelihood_exponent": 0.5,
-            "hidden_layer_sizes": [64, 64, 64],
-            "data_batch_size": 32,
-        }
-        bnn = BNN_SVGD(**standard_model_params, bandwidth_svgd=1.0)
-
-        # create learned spot system
-        system = LearnedSpotSystem(
-            model=bnn,
-            include_noise=self.include_aleatoric_noise,
-            predict_difference=self.predict_difference,
-            num_frame_stack=self.num_frame_stack,
-            **self.spot_reward_kwargs,
-        )
-
-        # handle keys
-        key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
-
-        # create env
-        env = BraxWrapper(
-            system=system,
-            sample_buffer_state=self.true_buffer_state,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-
-        # create SAC trainer
-        _sac_kwargs = self.sac_kwargs
-        sac_trainer = SAC(
-            environment=env,
-            eval_environment=env,
-            eval_key_fixed=True,
-            return_best_model=self.return_best_policy,
-            **_sac_kwargs,
-        )
-
-        # get policy function
-        make_inference_fn = sac_trainer.make_policy
-
-        @jit
-        def policy(x):
-            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
-
-        return policy
-
-    def prepare_policy_from_offline_data_bnn(
-        self, bnn_train_steps: int = 10_000, return_best_bnn: bool = True
-    ):
-        """Prepare policy from offline data using BNN-MODEL."""
-
-        # train bnn model
-        bnn_model = self.train_bnn_model(
-            bnn_train_steps=bnn_train_steps, return_best_bnn=return_best_bnn
-        )
-
-        # save bnn model
-        if self.wandb_logging:
-            directory = os.path.join(wandb.run.dir, "models")
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-            model_path = os.path.join("models", "bnn_model.pkl")
-            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
-                pickle.dump(bnn_model, handle)
-            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
-
-        # evaluate bnn model on all collected data
-        if self.evaluate_bnn_model_on_all_collected_data:
-            self.eval_bnn_model_on_all_collected_data(bnn_model)
-
-        # train policy
-        policy, params, metrics = self.train_policy_bnn(
-            bnn_model, self.true_buffer_state, self.key
-        )
-
-        # save policy parameters
-        if self.wandb_logging:
-            directory = os.path.join(wandb.run.dir, "models")
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-            model_path = os.path.join("models", "parameters.pkl")
-            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
-                pickle.dump(params, handle)
-            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
-
-        return policy, params, metrics, bnn_model
-
-    """==================================== SIM-MODEL FUNCTIONS ===================================="""
-
-    """============== Model training functions =============="""
-
-    def train_sim_model(
-        self,
-    ):
-        """Train SIM-MODEL on the collected data."""
-
-        spot_learned_params, spot_learned_observation_noise_std = (
-            execute_spot_system_id(
-                random_seed=self.key[0],
-                num_offline_collected_transitions=self.num_offline_collected_transitions,
-                num_sim_fitting_steps=self.num_sim_fitting_steps,
-                test_data_ratio=self.test_data_ratio,
-                wandb_logging=self.wandb_logging,
-            )
-        )
-        return spot_learned_params, spot_learned_observation_noise_std
-
-    """============== Policy training functions =============="""
-
-    def train_policy_sim(
-        self,
-        true_data_buffer_state: ReplayBufferState,
-        key: chex.PRNGKey,
-    ):
-        """Train policy using SAC and SIM-MODEL."""
-
-        # handle keys
-        key_train, key_simulate, key_init_state, *keys_sys_params = jr.split(key, 5)
-
-        # create spot system
-        system = SpotSystem(
-            encode_angle=self.spot_reward_kwargs["encode_angle"],
-            spot_model_params=self.spot_learned_params,
-            spot_obs_noise_std=self.spot_learned_observation_noise_std,
-            ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
-            ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
-            margin_factor=self.spot_reward_kwargs["margin_factor"],
-        )
-
-        # add init points to the true_data_buffer
-        key_init_state, key_init_buffer = jr.split(key_init_state)
-        init_transitions = self.prepare_init_transitions(
-            key_init_state, self.num_init_points_to_bs_for_learning
-        )
-
-        # setup training buffer
-        if self.train_sac_only_from_init_states:
-            train_buffer_state = self.true_data_buffer.init(key_init_buffer)
-            train_buffer_state = self.true_data_buffer.insert(
-                train_buffer_state, init_transitions
-            )
-        else:
-            train_buffer_state = self.true_data_buffer.insert(
-                true_data_buffer_state, init_transitions
-            )
-
-        # setup evaluation buffer
-        init_states_bs = train_buffer_state
-        if self.eval_sac_only_from_init_states:
-            init_states_bs = self.true_data_buffer.init(key_init_buffer)
-            init_states_bs = self.true_data_buffer.insert(
-                init_states_bs, init_transitions
-            )
-
-        # create training and eval environments (wrap system and insert buffer and init params)
-        env = BraxWrapper(
-            system=system,
-            sample_buffer_state=train_buffer_state,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-        eval_env = BraxWrapper(
-            system=system,
-            sample_buffer_state=init_states_bs,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-
-        # create SAC trainer
-        _sac_kwargs = self.sac_kwargs
-        sac_trainer = SAC(
-            environment=env,
-            eval_environment=eval_env,
-            eval_key_fixed=True,
-            return_best_model=self.return_best_policy,
-            **_sac_kwargs,
-        )
-
-        # train policy
-        params, metrics = sac_trainer.run_training(key=key_train)
-
-        # get policy function
-        make_inference_fn = sac_trainer.make_policy
-
-        @jit
-        def policy(x):
-            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
-
-        return policy, params, metrics
-
-    """============== Preparation functions =============="""
-
-    def prepare_policy_sim(self, params: Any | None = None, filename: str = None):
-        """Prepare policy function for inference from parameters or file using SIM-MODEL."""
-
-        # load parameters from file if not provided
-        if params is None:
-            with open(filename, "rb") as handle:
-                params = pickle.load(handle)
-
-        # create spot system
-        system = SpotSystem(
-            encode_angle=self.spot_reward_kwargs["encode_angle"],
-            spot_model_params=self.spot_learned_params,
-            spot_obs_noise_std=self.spot_learned_observation_noise_std,
-            ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
-            ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
-            margin_factor=self.spot_reward_kwargs["margin_factor"],
-        )
-
-        # handle keys
-        key_train, key_simulate, *keys_sys_params = jr.split(self.key, 4)
-
-        # create env
-        env = BraxWrapper(
-            system=system,
-            sample_buffer_state=self.true_buffer_state,
-            sample_buffer=self.true_data_buffer,
-            system_params=system.init_params(keys_sys_params[0]),
-        )
-
-        # create SAC trainer
-        _sac_kwargs = self.sac_kwargs
-        sac_trainer = SAC(
-            environment=env,
-            eval_environment=env,
-            eval_key_fixed=True,
-            return_best_model=self.return_best_policy,
-            **_sac_kwargs,
-        )
-
-        # get policy function
-        make_inference_fn = sac_trainer.make_policy
-
-        @jit
-        def policy(x):
-            return make_inference_fn(params, deterministic=True)(x, jr.PRNGKey(0))[0]
-
-        return policy
-
-    def prepare_policy_from_offline_data_sim(
-        self,
-    ):
-        """Prepare policy from offline data."""
-
-        # train simulator
-        self.spot_learned_params, self.spot_learned_observation_noise_std = (
-            self.train_sim_model()
-        )
-
-        # save sim model and noise std
-        directory = os.path.join(wandb.run.dir, "models")
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-        model_path = os.path.join("models", "sim_params.pkl")
-        with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
-            pickle.dump(self.spot_learned_params, handle)
-        wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
-        noise_std_path = os.path.join("models", "sim_observation_noise_std.pkl")
-        with open(os.path.join(wandb.run.dir, noise_std_path), "wb") as handle:
-            pickle.dump(self.spot_learned_observation_noise_std, handle)
-        wandb.save(os.path.join(wandb.run.dir, noise_std_path), wandb.run.dir)
-
-        # train policy
-        policy, params, metrics = self.train_policy_sim(
-            self.true_buffer_state, self.key
-        )
-
-        # save policy parameters
-        if self.wandb_logging:
-            directory = os.path.join(wandb.run.dir, "models")
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-            model_path = os.path.join("models", "parameters.pkl")
-            with open(os.path.join(wandb.run.dir, model_path), "wb") as handle:
-                pickle.dump(params, handle)
-            wandb.save(os.path.join(wandb.run.dir, model_path), wandb.run.dir)
-
-        return policy, params, metrics
-
-    """==================================== GENERAL EVAL/TESTING/DEBUGGING FUNCTIONS ===================================="""
-
     def eval_model_on_dedicated_data(
         self,
         spot_learned_params: dict = None,
@@ -1010,7 +935,7 @@ class RLFromOfflineData:
             # apply action delay
             testing_u_pre = delay_and_stack_spot_actions(
                 u=testing_u_pre,
-                action_stacking=False,
+                num_stacked_actions=self.num_frame_stack,
                 action_delay_base=action_delay_base,
                 action_delay_ee=action_delay_ee,
             )
@@ -1055,7 +980,7 @@ class RLFromOfflineData:
                 for i in range(testing_x.shape[0]):
                     if self.predict_difference:
                         delta_x, _ = model.predict(x_state)
-                        # reshape delta_x (a tuple) to match the shape of x_state 
+                        # reshape delta_x (a tuple) to match the shape of x_state
                         print(delta_x.shape)
                         y_pred = x_state[..., : self.state_dim] + delta_x
                     else:
@@ -1275,132 +1200,6 @@ class RLFromOfflineData:
                     }
                 )
                 wandb.log(step_extra_eval_metrics)
-
-    @staticmethod
-    def arg_mean(a: chex.Array):
-        """Return index of the element that is closest to the mean."""
-        return jnp.argmin(jnp.abs(a - jnp.mean(a)))
-
-    def evaluate_policy_on_the_simulator(
-        self,
-        policy: Callable,
-        key: chex.PRNGKey = jr.PRNGKey(0),
-        num_evals: int = 1,
-        save_traj_dir: str = None,
-    ):
-        """Evaluate policy on the default SIM-MODEL."""
-
-        # get reward and trajectory on the simulator
-        def reward_on_simulator(key: chex.PRNGKey):
-            # init actions buffer, simulator and get initial observation
-            actions_buffer = jnp.zeros(shape=(self.action_dim * self.num_frame_stack))
-            sim = SpotSimEnv(
-                encode_angle=True,
-                action_delay=1 / 10.0 * self.num_frame_stack,
-                margin_factor=self.spot_reward_kwargs["margin_factor"],
-                ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
-                ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
-                max_steps=self.sac_kwargs["episode_length"],
-            )
-            obs = sim.reset(key)
-
-            # use policy on simulator
-            done = False
-            transitions_for_plotting = []
-            while not done:
-                # get action from policy
-                policy_input = jnp.concatenate([obs, actions_buffer], axis=-1)
-                action = policy(policy_input)
-
-                # step simulator
-                next_obs, reward, done, info = sim.step(action)
-
-                # handle action buffer
-                if self.num_frame_stack > 0:
-                    next_actions_buffer = jnp.concatenate(
-                        [actions_buffer[self.action_dim :], action]
-                    )
-                else:
-                    next_actions_buffer = jnp.zeros(shape=(0,))
-
-                transitions_for_plotting.append(
-                    Transition(
-                        observation=obs,
-                        action=action,
-                        reward=jnp.array(reward),
-                        discount=jnp.array(0.99),
-                        next_observation=next_obs,
-                    )
-                )
-                actions_buffer = next_actions_buffer
-                obs = next_obs
-
-            concatenated_transitions_for_plotting = jtu.tree_map(
-                lambda *xs: jnp.stack(xs, axis=0), *transitions_for_plotting
-            )
-            reward_on_simulator = jnp.sum(concatenated_transitions_for_plotting.reward)
-            return reward_on_simulator, concatenated_transitions_for_plotting
-
-        # get rewards and trajectories
-        rewards, trajectories = vmap(reward_on_simulator)(jr.split(key, num_evals))
-
-        # get mean and std of rewards
-        reward_mean = jnp.mean(rewards)
-        reward_std = jnp.std(rewards)
-
-        # get trajectory with mean reward
-        reward_mean_index = self.arg_mean(rewards)
-        trajectory_mean = jtu.tree_map(lambda x: x[reward_mean_index], trajectories)
-
-        # plot trajectory evaluation
-        fig_eval, _ = plot_spot_trajectory(
-            trajectories,
-            encode_angle=True,
-            state_dim=13,
-            plot_mode="transitions_eval_full",
-        )
-
-        # plot trajectory ee-goal distance
-        fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
-            trajectories,
-            encode_angle=True,
-            state_dim=13,
-            plot_mode="transitions_distance_eval",
-        )
-
-        if self.wandb_logging:
-            model_name = "default_sim_model"
-            wandb.log(
-                {
-                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
-                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                    f"mean_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps
-                    ),
-                    f"reward_mean_on_{model_name}": float(reward_mean),
-                    f"reward_std_on_{model_name}": float(reward_std),
-                }
-            )
-            plt.close("all")
-
-        # save trajectories
-        if save_traj_dir is not None:
-            model_name = "default_sim_model"
-            save_traj_dir = os.path.join(save_traj_dir, model_name)
-
-            # save trajectories
-            if not os.path.exists(save_traj_dir):
-                os.makedirs(save_traj_dir)
-            with open(
-                os.path.join(save_traj_dir, "trajectories_all.pkl"), "wb"
-            ) as handle:
-                pickle.dump(trajectories, handle)
-            with open(
-                os.path.join(save_traj_dir, "trajectory_mean.pkl"), "wb"
-            ) as handle:
-                pickle.dump(trajectory_mean, handle)
-
-            print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
 
 
 if __name__ == "__main__":

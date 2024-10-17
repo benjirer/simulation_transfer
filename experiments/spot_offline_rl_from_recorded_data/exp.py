@@ -61,11 +61,6 @@ def experiment(
     # can only use one model at a time
     assert not (use_sim_prior and use_sim_model), "Can only use one model at a time"
 
-    # can't use frame stacking with sim model
-    assert not (
-        use_sim_model and num_frame_stack > 0
-    ), "Can't use frame stacking with sim model"
-
     # set parameters
     bnn_train_steps = min(
         num_epochs * num_offline_collected_transitions, max_train_steps
@@ -185,10 +180,11 @@ def experiment(
 
     # get data and sim
     x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real_with_goal_no_delay",
+        data_source="spot_real_with_goal",
         data_spec={
             "num_samples_train": int(num_offline_collected_transitions),
             "sampling": "consecutive" if obtain_consecutive_data else "iid",
+            "num_stacked_actions": num_frame_stack,
         },
         data_seed=int(int_data_seed),
     )
@@ -218,20 +214,10 @@ def experiment(
         "data_batch_size": bnn_batch_size,
         "hidden_activation": jax.nn.leaky_relu,
     }
-
-    use_sim_model_org = False
-
-    # for now:
-    if use_sim_model:
-        use_sim_model = False
-        use_sim_model_org = True
     
 
     # SIM-MODEL
     if use_sim_model:
-        # SIM-MODEL is handled inside RLFromOfflineData
-        model = None
-    elif use_sim_model_org:
         if predict_difference:
             sim = PredictStateChangeWrapper(sim)
         base_bnn = BNN_FSVGD(
@@ -341,46 +327,24 @@ def experiment(
         eval_bnn_model_on_all_offline_data=bool(eval_on_all_offline_data),
     )
 
-    # handle sim model and bnn model seperately
-    if use_sim_model:
-
-        # get policy from offline data
-        policy, params, metrics = (
-            rl_from_offline_data.prepare_policy_from_offline_data_sim()
+    # get policy from offline data
+    policy, params, metrics, bnn_model = (
+        rl_from_offline_data.prepare_policy_from_offline_data(
+            bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
         )
+    )
 
-        # evaluate learned sim model
-        rl_from_offline_data.eval_model_on_dedicated_data(spot_learned_params=params)
+    skip_eval = True
+    if not skip_eval:
+        # evaluate learned model
+        # rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
 
-        # evaluate policy on default sim model
-        rl_from_offline_data.evaluate_policy_on_the_simulator(
-            policy,
-            key=key_evaluation_pretrained_bnn,
-            num_evals=50,
-            save_traj_dir=(
-                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
-                if save_traj_local
-                else None
-            ),
-        )
-    else:
-
-        # get policy from offline data
-        policy, params, metrics, bnn_model = (
-            rl_from_offline_data.prepare_policy_from_offline_data_bnn(
-                bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
-            )
-        )
-
-        # evaluate learned bnn model
-        rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
-
-        # evaluate policy on learned bnn model
-        rl_from_offline_data.evaluate_policy_bnn(
+        # evaluate policy on learned model
+        rl_from_offline_data.evaluate_policy(
             policy,
             bnn_model,
             key=key_evaluation_trained_bnn,
-            num_evals=50,
+            num_evals=10,
             save_traj_dir=(
                 f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
                 if save_traj_local
@@ -392,128 +356,9 @@ def experiment(
         rl_from_offline_data.evaluate_policy_on_the_simulator(
             policy,
             key=key_evaluation_pretrained_bnn,
-            num_evals=50,
+            num_evals=10,
             save_traj_dir=(
                 f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
-                if save_traj_local
-                else None
-            ),
-        )
-
-        # # evaluate policy on the pretrained model
-        # rl_from_offline_data.evaluate_policy(
-        #     policy, key=key_evaluation_pretrained_bnn, num_evals=100
-        # )
-
-    """For testing/debugging: prepare policy as in real robot and then test"""
-    debugging = False
-    if debugging:
-        # get offline trained agent
-        def get_offline_trained_agent(
-            state_dim: int,
-            action_dim: int,
-            goal_dim: int,
-        ):
-            import pickle
-            import yaml
-
-            # fetch learned policy
-            wandb_api = wandb.Api()
-            project_name = wandb.run.project
-            run_id = run_id = wandb.run.id
-            local_dir = "saved_data"
-
-            if not os.path.exists(local_dir):
-                os.makedirs(local_dir)
-
-            run = wandb_api.run(f"{project_name}/{run_id}")
-            run.file("models/parameters.pkl").download(
-                replace=True, root=os.path.join(local_dir)
-            )
-
-            # get reward config
-            reward_keys = [
-                "encode_angle",
-                "ctrl_cost_weight",
-                "margin_factor",
-                "ctrl_diff_weight",
-            ]
-            reward_config = {}
-            for key in reward_keys:
-                reward_config[key] = run.config[key]
-
-            # save reward config
-            with open(os.path.join(local_dir, "reward_config.yaml"), "w") as file:
-                yaml.dump(reward_config, file)
-
-            # get policy params
-            policy_params = pickle.load(
-                open(os.path.join(local_dir, "models/parameters.pkl"), "rb")
-            )
-
-            # get reward config
-            reward_config = yaml.load(
-                open(os.path.join(local_dir, "reward_config.yaml"), "r"),
-                Loader=yaml.Loader,
-            )
-
-            SAC_KWARGS_TEST = dict(
-                num_timesteps=1_000_000,
-                num_evals=20,
-                reward_scaling=10,
-                episode_length=50,
-                episode_length_eval=2 * 50,
-                action_repeat=1,
-                discounting=0.99,
-                lr_policy=3e-4,
-                lr_alpha=3e-4,
-                lr_q=3e-4,
-                num_envs=64,
-                batch_size=64,
-                grad_updates_per_step=16 * 64,
-                num_env_steps_between_updates=16,
-                tau=0.005,
-                wd_policy=0,
-                wd_q=0,
-                wd_alpha=0,
-                num_eval_envs=2 * 64,
-                max_replay_size=5 * 10**4,
-                min_replay_size=2**11,
-                policy_hidden_layer_sizes=(64, 64),
-                critic_hidden_layer_sizes=(64, 64),
-                normalize_observations=True,
-                deterministic_eval=True,
-                wandb_logging=False,
-            )
-
-            return policy_params, reward_config, SAC_KWARGS_TEST
-
-        state_dim = 13
-        action_dim = 6
-        goal_dim = 3
-
-        policy_params, reward_config, SAC_KWARGS_TEST = get_offline_trained_agent(
-            state_dim=state_dim,
-            action_dim=action_dim,
-            goal_dim=goal_dim,
-        )
-
-        rl_from_offline_data_test = RLFromOfflineData(
-            sac_kwargs=SAC_KWARGS_TEST,
-            x_train=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
-            y_train=jax.numpy.zeros((10, state_dim)),
-            x_test=jax.numpy.zeros((10, state_dim + goal_dim + action_dim)),
-            y_test=jax.numpy.zeros((10, state_dim)),
-            spot_reward_kwargs=reward_config,
-        )
-        policy_test = rl_from_offline_data_test.prepare_policy_sim(params=policy_params)
-
-        rl_from_offline_data_test.evaluate_policy_on_the_simulator_test(
-            policy_test,
-            key=key_evaluation_pretrained_bnn,
-            num_evals=50,
-            save_traj_dir=(
-                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/sim/{wandb.run.id}"
                 if save_traj_local
                 else None
             ),

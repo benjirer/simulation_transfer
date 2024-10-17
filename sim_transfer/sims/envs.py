@@ -312,10 +312,10 @@ class SpotEnvReward:
         bound: float = 0.1,
         margin_factor: float = 10.0,
         # additional
-        ee_body_reward_weight: float = 0.01,
-        # base_linear_action_cost_weight: float = 1.0,
-        # base_theta_action_cost_weight: float = 1.0,
-        # ee_action_cost_weight: float = 1.0,
+        ee_body_reward_weight: float = 0.001,
+        base_linear_action_cost_weight: float = 1.5,
+        base_theta_action_cost_weight: float = 1.0,
+        ee_action_cost_weight: float = 0.5,
         dim_goal: int = 3,
     ):
         self.encode_angle = encode_angle
@@ -329,9 +329,9 @@ class SpotEnvReward:
 
         # additional
         self.ee_body_reward_weight = ee_body_reward_weight
-        # self.base_linear_action_cost_weight = base_linear_action_cost_weight
-        # self.base_theta_action_cost_weight = base_theta_action_cost_weight
-        # self.ee_action_cost_weight = ee_action_cost_weight
+        self.base_linear_action_cost_weight = base_linear_action_cost_weight
+        self.base_theta_action_cost_weight = base_theta_action_cost_weight
+        self.ee_action_cost_weight = ee_action_cost_weight
         self.dim_goal = dim_goal
         self.tolerance_reward_ee_base_distance = ToleranceReward(
             bounds=(0.0, 1.3),
@@ -355,15 +355,15 @@ class SpotEnvReward:
         base_linear_action_cost, base_theta_action_cost, ee_action_cost, total_action_cost = (
             self.action_cost(action)
         )
-        # action_cost = (
-        #     self.base_linear_action_cost_weight * base_linear_action_cost
-        #     + self.base_theta_action_cost_weight * base_theta_action_cost
-        #     + self.ee_action_cost_weight * ee_action_cost
-        # )
-        action_cost = total_action_cost
+        action_cost = (
+            self.base_linear_action_cost_weight * base_linear_action_cost
+            + self.base_theta_action_cost_weight * base_theta_action_cost
+            + self.ee_action_cost_weight * ee_action_cost
+        )
+        # action_cost = total_action_cost
 
         # action difference cost
-        action_diff_cost = self.action_difference_cost(next_obs, action)
+        # action_diff_cost = self.action_difference_cost(next_obs, action)
 
         # reward for staying within ee-body distance constraint
         ee_body_reward = self.ee_body_reward(next_obs)
@@ -372,7 +372,6 @@ class SpotEnvReward:
         reward = (
             state_reward
             + self.ctrl_cost_weight * action_cost
-            + 0.05 * action_diff_cost
             + self.ee_body_reward_weight * ee_body_reward
         )
         return reward
@@ -624,7 +623,13 @@ class SpotSimEnv:
     def _get_delayed_action(self, action: jnp.array) -> Tuple[jnp.array, jnp.array]:
         # push action to action buffer
         last_action = self._action_buffer[-1]
-        reward = -self.ctrl_diff_weight * jnp.sum((action - last_action) ** 2)
+        action_base_penalty = self.ctrl_diff_weight * jnp.sum(
+            (action[:3] - last_action[:3]) ** 2
+        )
+        action_ee_penalty = self.ctrl_diff_weight * jnp.sum(
+            (action[3:] - last_action[3:]) ** 2
+        )
+        reward = -2.0 * action_base_penalty - 0.5 * action_ee_penalty
         self._action_buffer = jnp.concatenate(
             [self._action_buffer[1:], action[None, :]], axis=0
         )

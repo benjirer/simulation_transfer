@@ -17,9 +17,10 @@ from experiments.util import get_trajectory_windows
 from experiments.data_provider import _load_spot_datasets
 from sim_transfer.sims.dynamics_models import SpotDynamicsModel, SpotParams
 from sim_transfer.sims.simulators import SpotSim
-from sim_transfer.sims.util import angle_diff, delay_and_stack_spot_actions
+from sim_transfer.sims.util import angle_diff
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
 from sim_transfer.sims.util import decode_angles as decode_angles_fn
+from experiments.data_provider import delay_and_stack_spot_actions
 
 
 from brax.training.types import Transition

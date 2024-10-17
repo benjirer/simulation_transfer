@@ -13,9 +13,7 @@ from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
 from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
 from sim_transfer.sims.simulators import StackedActionSimWrapper
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
-from sim_transfer.sims.util import (
-    delay_and_stack_spot_actions as delay_and_stack_spot_actions_fn,
-)
+
 
 DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
@@ -363,13 +361,78 @@ def _load_spot_datasets(file_path: Union[str, List[str]]):
     return dataset
 
 
+def delay_and_stack_spot_actions(
+    u: jnp.array,
+    num_stacked_actions: int = 0,
+    action_delay_base: int = 0,
+    action_delay_ee: int = 0,
+    action_dim_base: int = 3,
+    action_dim_ee: int = 3,
+) -> jnp.array:
+    """Delay and stack the actions for the spot robot"""
+    assert (
+        u.shape[-1] == action_dim_base + action_dim_ee
+    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match given dims {action_dim_base + action_dim_ee}"
+    assert action_delay_base >= 0 and action_delay_ee >= 0, "Action delay must be >= 0"
+    assert not (
+        num_stacked_actions > 0 and (action_delay_base > 0 or action_delay_ee > 0)
+    ), "Can't use action stacking and action delay at the same time"
+
+    # action stacking
+    if num_stacked_actions > 0:
+        print(
+            f"[data_provider] Using action stacking with stacked actions: {num_stacked_actions}",
+        )
+
+        u_padded = jnp.pad(u, ((num_stacked_actions, 0), (0, 0)), mode="constant")
+        indices = (
+            jnp.arange(u.shape[0])[:, None]
+            + jnp.arange(-num_stacked_actions, 1)[None, :]
+            + num_stacked_actions
+        )
+        u_stacked = u_padded[indices].reshape(u.shape[0], -1)
+        assert u_stacked.shape == (
+            u.shape[0],
+            6 * (num_stacked_actions + 1),
+        ), f"Something went wrong with the action stacking, expected shape {u.shape[0], 6 * (num_stacked_actions + 1)} but got {u_stacked.shape}"
+        u = u_stacked
+
+    # only action delay
+    elif action_delay_base > 0 or action_delay_ee > 0:
+        u_base, u_ee = u[:, :3], u[:, 3:]
+        print(
+            f"[data_provider] Using action delay with base action delay: {action_delay_base} and ee action delay: {action_delay_ee}",
+        )
+
+        if action_delay_base > 0:
+            u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])
+            u_delayed_base = jnp.concatenate(
+                [u_delayed_start, u_base[:-action_delay_base]]
+            )
+            assert (
+                u_delayed_base.shape == u_base.shape
+            ), "Something went wrong with the base action delay"
+            u_base = u_delayed_base
+
+        if action_delay_ee > 0:
+            u_delayed_start = jnp.zeros_like(u_ee[:action_delay_ee])
+            u_delayed_ee = jnp.concatenate([u_delayed_start, u_ee[:-action_delay_ee]])
+            assert (
+                u_delayed_ee.shape == u_ee.shape
+            ), "Something went wrong with the ee action delay"
+            u_ee = u_delayed_ee
+        u = jnp.concatenate([u_base, u_ee], axis=-1)
+
+    return u
+
+
 def _prepare_spot_datasets(
     dataset_pre: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
     encode_angles: bool = False,
     skip_first_n: int = 30,
-    action_delay_base: int = 2,
-    action_delay_ee: int = 1,
-    action_stacking: bool = False,
+    action_delay_base: int = 0,
+    action_delay_ee: int = 0,
+    num_stacked_actions: int = 0,
     angle_idx: int = 2,
     add_goal: bool = False,
 ):
@@ -378,9 +441,9 @@ def _prepare_spot_datasets(
 
     # action stacking and action delay
     # note: we can can't split action delay if we use action stacking
-    u = delay_and_stack_spot_actions_fn(
+    u = delay_and_stack_spot_actions(
         u=u,
-        action_stacking=action_stacking,
+        num_stacked_actions=num_stacked_actions,
         action_delay_base=action_delay_base,
         action_delay_ee=action_delay_ee,
     )
@@ -423,7 +486,7 @@ def _prepare_spot_datasets(
     assert x_data.shape[0] == y_data.shape[0]
     assert (
         x_data.shape[1]
-        - 6 * (max(action_delay_base, action_delay_ee) * int(action_stacking) + 1)
+        - 6 * (1 + num_stacked_actions)
         == y_data.shape[1]
     )
 
@@ -433,9 +496,9 @@ def _prepare_spot_datasets(
 def get_spot_recorded_data(
     encode_angle: bool = True,
     skip_first_n_points: int = 30,
-    action_delay_base: int = 2,
-    action_delay_ee: int = 1,
-    action_stacking: bool = False,
+    action_delay_base: int = 0,
+    action_delay_ee: int = 0,
+    num_stacked_actions: int = 0,
     num_test_points: int = 1000,
     angle_idx: int = 2,
     shuffle: bool = True,
@@ -466,7 +529,7 @@ def get_spot_recorded_data(
         skip_first_n=skip_first_n_points,
         action_delay_base=action_delay_base,
         action_delay_ee=action_delay_ee,
-        action_stacking=action_stacking,
+        num_stacked_actions=num_stacked_actions,
         angle_idx=angle_idx,
         add_goal=add_goal,
     )
@@ -860,57 +923,31 @@ def provide_data_and_sim(
 
         # get data and sim
         if data_source == "spot_real":
-            sim = SpotSim(encode_angle=True)
-            print("[data_provider] Using real Spot data")
+            num_stacked_actions = data_spec.get("num_stacked_actions", 0)
+            if num_stacked_actions > 0:
+                sim = StackedActionSimWrapper(
+                    SpotSim(encode_angle=True), num_stacked_actions=num_stacked_actions, action_size=6
+                )
+            else:
+                sim = SpotSim(encode_angle=True)
+            print(f"[data_provider] Using real Spot data with {num_stacked_actions} stacked actions")
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
                 encode_angle=True,
-            )
-        elif data_source == "spot_real_no_delay":
-            sim = SpotSim(encode_angle=True)
-            print("[data_provider] Using real Spot data with no delay")
-            x_train, y_train, x_test, y_test = get_spot_recorded_data(
-                encode_angle=True,
-                action_delay_base=0,
-                action_delay_ee=0,
-            )
-        elif data_source == "spot_real_actionstack":
-            sim = SpotSim(encode_angle=True)
-            num_stacked_actions = data_spec.get("num_stacked_actions", 2)
-            sim = StackedActionSimWrapper(
-                sim, num_stacked_actions=num_stacked_actions, action_size=6
-            )
-            print("[data_provider] Using real Spot data with action stacking")
-            x_train, y_train, x_test, y_test = get_spot_recorded_data(
-                encode_angle=True,
-                action_stacking=True,
-            )
-        elif data_source == "spot_real_actionstack_no_shuffle":
-            sim = SpotSim(encode_angle=True)
-            num_stacked_actions = data_spec.get("num_stacked_actions", 2)
-            sim = StackedActionSimWrapper(
-                sim, num_stacked_actions=num_stacked_actions, action_size=6
-            )
-            print("[data_provider] Using real Spot data with action stacking")
-            x_train, y_train, x_test, y_test = get_spot_recorded_data(
-                encode_angle=True,
-                action_stacking=True,
-                shuffle=False,
+                num_stacked_actions=num_stacked_actions,
             )
         elif data_source == "spot_real_with_goal":
-            sim = SpotSim(encode_angle=True)
-            print("[data_provider] Using real Spot data with goal")
+            num_stacked_actions = data_spec.get("num_stacked_actions", 0)
+            if num_stacked_actions > 0:
+                sim = StackedActionSimWrapper(
+                    SpotSim(encode_angle=True), num_stacked_actions=num_stacked_actions, action_size=6
+                )
+            else:
+                sim = SpotSim(encode_angle=True)
+            print(f"[data_provider] Using real Spot data with goal and {num_stacked_actions} stacked actions")
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
                 encode_angle=True,
                 add_goal=True,
-            )
-        elif data_source == "spot_real_with_goal_no_delay":
-            sim = SpotSim(encode_angle=True)
-            print("[data_provider] Using real Spot data with goal and no delay")
-            x_train, y_train, x_test, y_test = get_spot_recorded_data(
-                encode_angle=True,
-                add_goal=True,
-                action_delay_base=0,
-                action_delay_ee=0,
+                num_stacked_actions=num_stacked_actions,
             )
         else:
             raise ValueError(f"Unknown spot data source {data_source}")
