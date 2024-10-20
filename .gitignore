@@ -164,7 +164,7 @@ plotting_scripts/plots
 /wandb/
 .idea/
 resources/
-results/
+# results/
 old_results/
 log/
 tf_summaries/

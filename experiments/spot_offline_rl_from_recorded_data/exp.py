@@ -334,7 +334,7 @@ def experiment(
         )
     )
 
-    skip_eval = True
+    skip_eval = False
     if not skip_eval:
         # evaluate learned model
         # rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)

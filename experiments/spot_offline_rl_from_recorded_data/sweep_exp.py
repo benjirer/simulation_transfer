@@ -9,10 +9,10 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
     random.seed(0)
     # random_seed = random.sample(range(1, 1_000_000), 3)
-    # random_seed = [42, 9126, 1913244]
-    random_seed = [42]
-    # num_offline_collected_transitions = [800, 2000, 5000]
-    num_offline_collected_transitions = [5000]
+    random_seed = [42, 9126, 1913244]
+    # random_seed = [42]
+    num_offline_collected_transitions = [800, 2000, 5000]
+    # num_offline_collected_transitions = [5000]
 
     parameters = {
         # parameters general
@@ -21,19 +21,19 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "num_offline_collected_transitions": num_offline_collected_transitions,
         "test_data_ratio": [0.15],
         "wandb_logging": [True],
-        "project_name": ["action_stack_testing_v6"],
+        "project_name": ["policy_testing_full_v9"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
     }
 
     parameters_rl = {
         # parameters rl
-        "horizon_len": [100],
+        "horizon_len": [120],
         "sac_num_env_steps": [2_500_000],
         "best_policy": [1],
-        "margin_factor": [5.0],
+        "margin_factor": [10.0],
         "ctrl_cost_weight": [0.05],
-        "ctrl_diff_weight": [0.3],
+        "ctrl_diff_weight": [0.3, 0.4],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [1],
         "eval_on_all_offline_data": [1],
@@ -99,7 +99,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 if __name__ == "__main__":
     """Experiment settings"""
     models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
-    models = ["bnn-sim-fsvgd"]
+    # models = ["bnn-sim-fsvgd"]
     mode = "local"
     num_cpus = 1
     num_gpus = 1
