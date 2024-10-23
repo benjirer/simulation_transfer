@@ -189,6 +189,22 @@ class SpotParams(NamedTuple):
     gamma_ee_2: jax.Array = jnp.array(1.0)
     gamma_ee_3: jax.Array = jnp.array(1.0)
 
+    # if we include the ee orientation
+    alpha_ee_ang_1: jax.Array = jnp.array(0.0)
+    alpha_ee_ang_2: jax.Array = jnp.array(0.0)
+    alpha_ee_ang_3: jax.Array = jnp.array(0.0)
+
+    beta_ee_ang_1: jax.Array = jnp.array(0.0)
+    beta_ee_ang_2: jax.Array = jnp.array(0.0)
+    beta_ee_ang_3: jax.Array = jnp.array(0.0)
+    beta_ee_ang_4: jax.Array = jnp.array(0.0)
+    beta_ee_ang_5: jax.Array = jnp.array(0.0)
+    beta_ee_ang_6: jax.Array = jnp.array(0.0)
+
+    gamma_ee_ang_1: jax.Array = jnp.array(1.0)
+    gamma_ee_ang_2: jax.Array = jnp.array(1.0)
+    gamma_ee_ang_3: jax.Array = jnp.array(1.0)
+
 
 class DynamicsModel(ABC):
     def __init__(self,
@@ -1150,14 +1166,14 @@ class SpotDynamicsModel(DynamicsModel):
         dt,
         encode_angle: bool = True,
         input_in_local_frame: bool = True,
-        use_constraints: bool = False,
+        include_ee_orientation: bool = False,
     ):
         self.encode_angle = encode_angle
         self.input_in_local_frame = input_in_local_frame
-        self.use_constraints = use_constraints
-        self.x_dim = 12
-        self.u_dim = 6
-        self.angle_idx = 2
+        self.include_ee_orientation = include_ee_orientation
+        self.x_dim = 12 if not self.include_ee_orientation else 12 + 6
+        self.u_dim = 6 if not self.include_ee_orientation else 6 + 3
+        self.angle_idx = 2 if not self.include_ee_orientation else jnp.array([2, 12, 13, 14])
         self.base_velocity_start_idx = 4 if self.encode_angle else 3
         super().__init__(
             dt=dt,
@@ -1191,75 +1207,20 @@ class SpotDynamicsModel(DynamicsModel):
                     + self.dt_integration * dx[6:9] * gamma[3:6]
                     + beta_pos[3:6]
                 )
+                if self.include_ee_orientation:
+                    q = q.at[12:15].set(
+                        carry[12:15]
+                        + self.dt_integration * dx[12:15] * gamma[6:9]
+                        + beta_pos[6:9]
+                    )
 
                 # velocities
                 q = q.at[3:6].set(self.dt_integration * dx[3:6] + beta_vel[:3])
                 q = q.at[9:12].set(self.dt_integration * dx[9:12] + beta_vel[3:6])
+                if self.include_ee_orientation:
+                    q = q.at[15:18].set(self.dt_integration * dx[15:18] + beta_vel[6:9])
 
                 return q
-
-            def constrain_update(
-                carry: jnp.array,
-                q_pre: jnp.array,
-                u: jnp.array,
-                params: SpotParams,
-                gamma: jnp.array,
-                beta_pos: jnp.array,
-                beta_vel: jnp.array,
-            ):
-                """
-                The physical system has constraints:
-                    Arm attachment to base: Induces physical constraints on distance between base and end effector
-                    Ground: Induces physical constraints on the z-axis position of the end effector
-
-                Make sure that dynamics model respects these constraints by:
-                    Arm attachment to base: Set velocity from EE command to zero (velocities induced by base are kept - these can't make EE move outside of constraints)
-                    Ground: Set z-axis velocity to zero and set z-position to limit (EE cannot move through the ground)
-                
-                Then, recall dx computation with constrained ee x,y,z velocities and set ee_constrained=0 in ode call.
-                """
-                max_distance_ee_base = jnp.array(1.3)
-                min_distance_ee_ground = jnp.array(0.05)
-                # TODO: we could add base z component to observations and make this more exact
-                base_pos = jnp.concatenate([q_pre[:2], jnp.array([0.445])])
-                ee_pos = q_pre[6:9]
-
-                # distance between base and end effector
-                def true_fun_base(q_pre):
-                    # recall dx with EE vel commands set to zero
-                    u_constrained = jnp.concatenate([u[:3], jnp.zeros(3)])
-                    dx_constrained = self.ode(carry, u_constrained, params, ee_constrained_dist=jnp.array(0.0))
-                    q_constrained = update_q(
-                        carry, dx_constrained, gamma, beta_pos, beta_vel
-                    )
-                    return q_constrained
-
-                def false_fun_base(q_pre):
-                    return q_pre
-
-                q_pre = jax.lax.cond(
-                    jnp.linalg.norm(ee_pos - base_pos) > max_distance_ee_base,
-                    true_fun_base,
-                    false_fun_base,
-                    q_pre,
-                )
-
-                # distance between end effector and ground
-                def true_fun_ground(q_pre):
-                    q_pre = q_pre.at[8].set(min_distance_ee_ground)
-                    return q_pre.at[11].set(0.0)
-
-                def false_fun_ground(q_pre):
-                    return q_pre
-
-                q_pre = jax.lax.cond(
-                    ee_pos[2] < min_distance_ee_ground,
-                    true_fun_ground,
-                    false_fun_ground,
-                    q_pre,
-                )
-
-                return q_pre
 
             # get params
             beta_pos = jnp.array(
@@ -1293,28 +1254,56 @@ class SpotDynamicsModel(DynamicsModel):
                 ]
             )
 
+            if self.include_ee_orientation:
+                beta_pos = jnp.concatenate(
+                    [
+                        beta_pos,
+                        jnp.array(
+                            [
+                                params.beta_ee_ang_1,
+                                params.beta_ee_ang_2,
+                                params.beta_ee_ang_3,
+                            ]
+                        ),
+                    ]
+                )
+                beta_vel = jnp.concatenate(
+                    [
+                        beta_vel,
+                        jnp.array(
+                            [
+                                params.beta_ee_ang_4,
+                                params.beta_ee_ang_5,
+                                params.beta_ee_ang_6,
+                            ]
+                        ),
+                    ]
+                )
+                gamma = jnp.concatenate([gamma, jnp.array([params.gamma_ee_ang_1, params.gamma_ee_ang_2, params.gamma_ee_ang_3])])
+
             # get updates
             dx = self.ode(carry, u, params)
             q_updated = update_q(carry, dx, gamma, beta_pos, beta_vel)
 
-            # check constraints
-            if self.use_constraints:
-                q_constrained = constrain_update(
-                    carry, q_updated, u, params, gamma, beta_pos, beta_vel
-                )
-
-                return q_constrained, None
-            else:
-                return q_updated, None
+            return q_updated, None
 
         next_state, _ = jax.lax.scan(body, x, xs=None, length=self._num_steps_integrate)
 
-        if self.angle_idx:
-            theta = next_state[..., self.angle_idx]
-            sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-            next_state = next_state.at[self.angle_idx].set(
-                jnp.arctan2(sin_theta, cos_theta)
-            )
+        if self.angle_idx is not None:
+            # cast angle to [-pi, pi]
+            if self.include_ee_orientation:
+                theta = next_state[..., self.angle_idx[0]]
+                sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
+                next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
+
+                ee_rx, ee_ry, ee_rz = next_state[..., self.angle_idx[1]], next_state[..., self.angle_idx[2]], next_state[..., self.angle_idx[3]]
+                next_state = next_state.at[self.angle_idx[1]].set(jnp.arctan2(jnp.sin(ee_rx), jnp.cos(ee_rx)))
+                next_state = next_state.at[self.angle_idx[2]].set(jnp.arctan2(jnp.sin(ee_ry), jnp.cos(ee_ry)))
+                next_state = next_state.at[self.angle_idx[3]].set(jnp.arctan2(jnp.sin(ee_rz), jnp.cos(ee_rz)))
+            else:
+                theta = next_state[..., self.angle_idx]
+                sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
+                next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
         return next_state
 
     def next_step(self, x: jnp.array, u: jnp.array, params: SpotParams) -> jnp.array:
@@ -1327,33 +1316,78 @@ class SpotDynamicsModel(DynamicsModel):
         return next_x
 
     def reduce_x(self, x):
-        theta = jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
-        x_reduced = jnp.concatenate(
-            [
-                x[..., 0 : self.angle_idx],
-                jnp.atleast_1d(theta),
-                x[..., self.angle_idx + 2 :],
-            ],
-            axis=-1,
-        )
+        if self.include_ee_orientation:
+            indices_in_encoded = [self.angle_idx[0], self.angle_idx[1] + 1, self.angle_idx[2] + 2, self.angle_idx[3] + 3]
+            theta = jnp.arctan2(x[..., indices_in_encoded[0]], x[..., indices_in_encoded[0] + 1])
+            ee_rx = jnp.arctan2(x[..., indices_in_encoded[1]], x[..., indices_in_encoded[1] + 1])
+            ee_ry = jnp.arctan2(x[..., indices_in_encoded[2]], x[..., indices_in_encoded[2] + 1])
+            ee_rz = jnp.arctan2(x[..., indices_in_encoded[3]], x[..., indices_in_encoded[3] + 1])
+            x_reduced = jnp.concatenate(
+                [
+                    x[..., 0 : indices_in_encoded[0]],
+                    jnp.atleast_1d(theta),
+                    x[..., indices_in_encoded[0] + 2 : indices_in_encoded[1]],
+                    jnp.atleast_1d(ee_rx),
+                    x[..., indices_in_encoded[1] + 2 : indices_in_encoded[2]],
+                    jnp.atleast_1d(ee_ry),
+                    x[..., indices_in_encoded[2] + 2 : indices_in_encoded[3]],
+                    jnp.atleast_1d(ee_rz),
+                    x[..., indices_in_encoded[3] + 2 :],
+                ],
+                axis=-1,
+            )
+        else:
+            theta = jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
+            x_reduced = jnp.concatenate(
+                [
+                    x[..., 0 : self.angle_idx],
+                    jnp.atleast_1d(theta),
+                    x[..., self.angle_idx + 2 :],
+                ],
+                axis=-1,
+            )
         return x_reduced
 
     def expand_x(self, x):
-        theta = jnp.atleast_1d(x[..., self.angle_idx])
-        x_expanded = jnp.concatenate(
-            [
-                x[..., 0 : self.angle_idx],
-                jnp.sin(theta),
-                jnp.cos(theta),
-                x[..., self.angle_idx + 1 :],
-            ],
-            axis=-1,
-        )
+        if self.include_ee_orientation:
+            theta = x[..., self.angle_idx[0]]
+            ee_rx = x[..., self.angle_idx[1]]
+            ee_ry = x[..., self.angle_idx[2]]
+            ee_rz = x[..., self.angle_idx[3]]
+            x_expanded = jnp.concatenate(
+                [
+                    x[..., 0 : self.angle_idx[0]],
+                    jnp.sin(theta),
+                    jnp.cos(theta),
+                    x[..., self.angle_idx[0] + 1 : self.angle_idx[1]],
+                    jnp.sin(ee_rx),
+                    jnp.cos(ee_rx),
+                    x[..., self.angle_idx[1] + 1 : self.angle_idx[2]],
+                    jnp.sin(ee_ry),
+                    jnp.cos(ee_ry),
+                    x[..., self.angle_idx[2] + 1 : self.angle_idx[3]],
+                    jnp.sin(ee_rz),
+                    jnp.cos(ee_rz),
+                    x[..., self.angle_idx[3] + 1 :],
+                ],
+                axis=-1,
+            )
+        else:
+            theta = jnp.atleast_1d(x[..., self.angle_idx])
+            x_expanded = jnp.concatenate(
+                [
+                    x[..., 0 : self.angle_idx],
+                    jnp.sin(theta),
+                    jnp.cos(theta),
+                    x[..., self.angle_idx + 1 :],
+                ],
+                axis=-1,
+            )
         return x_expanded
 
     def transform_input_to_global(self, x, u):
         # convert input to global frame
-        theta = x[..., self.angle_idx] # as x is always reduced
+        theta = x[..., self.angle_idx] if not self.include_ee_orientation else x[..., self.angle_idx[0]]
         cos_theta = jnp.cos(theta)
         sin_theta = jnp.sin(theta)
         u_global = jnp.zeros_like(u)
@@ -1363,6 +1397,11 @@ class SpotDynamicsModel(DynamicsModel):
         u_global = u_global.at[3].set(cos_theta * u[..., 3] - sin_theta * u[..., 4])
         u_global = u_global.at[4].set(sin_theta * u[..., 3] + cos_theta * u[..., 4])
         u_global = u_global.at[5].set(u[..., 5])
+
+        if self.include_ee_orientation:
+            u_global = u_global.at[6].set(u[..., 6])
+            u_global = u_global.at[7].set(u[..., 7])
+            u_global = u_global.at[8].set(u[..., 8])
         return u_global
 
     def calculate_rotation_induced_velocity(self, x, base_vtheta):
@@ -1383,7 +1422,7 @@ class SpotDynamicsModel(DynamicsModel):
         vy = vel_ee_from_rot * jnp.sin(alpha)
         return vx, vy
 
-    def _ode(self, x, u, params: SpotParams, ee_constrained_dist: jnp.array = 1.0):
+    def _ode(self, x, u, params: SpotParams):
         """
         Use kinematic model with weighted velocity between previous and current velocity
         Note: Need to add base velocity and rotation induced velocity to get end effector velocity in global frame
@@ -1409,19 +1448,19 @@ class SpotDynamicsModel(DynamicsModel):
             x, base_vtheta
         )
         ee_vx = (
-            params.alpha_ee_1 * x[..., 9] * ee_constrained_dist
+            params.alpha_ee_1 * x[..., 9]
             + (1 - params.alpha_ee_1) * u[..., 3]
             + ee_rotinduced_vx
             + base_vx
         )
         ee_vy = (
-            params.alpha_ee_2 * x[..., 10] * ee_constrained_dist
+            params.alpha_ee_2 * x[..., 10]
             + (1 - params.alpha_ee_2) * u[..., 4]
             + ee_rotinduced_vy
             + base_vy
         )
-        ee_vz = params.alpha_ee_3 * x[..., 11] * ee_constrained_dist + (1 - params.alpha_ee_3) * u[..., 5]
-
+        ee_vz = params.alpha_ee_3 * x[..., 11] + (1 - params.alpha_ee_3) * u[..., 5]
+        
         # positions dx
         base_x_dot = base_vx
         base_y_dot = base_vy
@@ -1438,22 +1477,62 @@ class SpotDynamicsModel(DynamicsModel):
         ee_vy_dot = ee_vy / self.dt_integration
         ee_vz_dot = ee_vz / self.dt_integration
 
-        dx = jnp.array(
-            [
-                base_x_dot,
-                base_y_dot,
-                base_theta_dot,
-                base_vx_dot,
-                base_vy_dot,
-                base_vtheta_dot,
-                ee_x_dot,
-                ee_y_dot,
-                ee_z_dot,
-                ee_vx_dot,
-                ee_vy_dot,
-                ee_vz_dot,
-            ]
-        )
+        # handle ee orientation
+        if self.include_ee_orientation:
+            # new velocities
+            ee_vrx = params.alpha_ee_ang_1 * x[..., 15] + (1 - params.alpha_ee_ang_1) * u[..., 6]
+            ee_vry = params.alpha_ee_ang_2 * x[..., 16] + (1 - params.alpha_ee_ang_2) * u[..., 7]
+            ee_vrz = params.alpha_ee_ang_3 * x[..., 17] + (1 - params.alpha_ee_ang_3) * u[..., 8]
+            
+            # positions dx
+            ee_rx_dot = ee_vrx
+            ee_ry_dot = ee_vry
+            ee_rz_dot = ee_vrz
+
+            # velocities dx
+            ee_vrx_dot = ee_vrx / self.dt_integration
+            ee_vry_dot = ee_vry / self.dt_integration
+            ee_vrz_dot = ee_vrz / self.dt_integration
+
+            dx = jnp.array(
+                [
+                    base_x_dot,
+                    base_y_dot,
+                    base_theta_dot,
+                    base_vx_dot,
+                    base_vy_dot,
+                    base_vtheta_dot,
+                    ee_x_dot,
+                    ee_y_dot,
+                    ee_z_dot,
+                    ee_vx_dot,
+                    ee_vy_dot,
+                    ee_vz_dot,
+                    ee_rx_dot,
+                    ee_ry_dot,
+                    ee_rz_dot,
+                    ee_vrx_dot,
+                    ee_vry_dot,
+                    ee_vrz_dot,
+                ]
+            )
+        else:
+            dx = jnp.array(
+                [
+                    base_x_dot,
+                    base_y_dot,
+                    base_theta_dot,
+                    base_vx_dot,
+                    base_vy_dot,
+                    base_vtheta_dot,
+                    ee_x_dot,
+                    ee_y_dot,
+                    ee_z_dot,
+                    ee_vx_dot,
+                    ee_vy_dot,
+                    ee_vz_dot,
+                ]
+            )
 
         return dx
 
