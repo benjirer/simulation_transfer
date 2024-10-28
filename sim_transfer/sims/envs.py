@@ -302,8 +302,11 @@ class RCCarSimEnv:
 
 
 class SpotEnvReward:
+    _include_ee_orientation: bool = True
+    if _include_ee_orientation:
+        _angle_idx: list = [2, 12, 13, 14]
     _angle_idx: int = 2
-    dim_action: Tuple[int] = (6,)
+    dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
 
     def __init__(
         self,
@@ -316,7 +319,7 @@ class SpotEnvReward:
         base_linear_action_cost_weight: float = 1.5,
         base_theta_action_cost_weight: float = 1.0,
         ee_action_cost_weight: float = 0.5,
-        dim_goal: int = 3,
+        dim_goal: int = 3 if not _include_ee_orientation else 6,
     ):
         self.encode_angle = encode_angle
         self.ctrl_cost_weight = ctrl_cost_weight
@@ -388,23 +391,46 @@ class SpotEnvReward:
     def state_reward(self, obs: jnp.array, next_obs: jnp.array) -> jnp.array:
         """Computes the reward for the given observations"""
         if self.encode_angle:
-            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
-        goal = next_obs[..., 12 : 12 + self.dim_goal]
+            if self._include_ee_orientation:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
+                goal = next_obs[..., 18 : 18 + self.dim_goal]
+            else:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+            goal = next_obs[..., 12 : 12 + self.dim_goal]
         assert (
             goal.shape[-1] == self.dim_goal
         ), f"Goal shape {goal.shape} must be {self.dim_goal}"
         ee_pos_diff = next_obs[..., 6:9] - goal
         ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-        reward = self.tolerance_reward(ee_pos_dist)
+        reward_pos = self.tolerance_reward(ee_pos_dist)
+        if self._include_ee_orientation:
+            ee_ang_diff = next_obs[..., 12:15] - goal[3:6]
+            ee_ang_dist = jnp.sqrt(jnp.sum(jnp.square(ee_ang_diff), axis=-1))
+            reward_ang = self.tolerance_reward(ee_ang_dist)
+            reward = reward_pos + reward_ang
+        else:
+            reward = reward_pos
         return reward
     
     def action_difference_cost(self, next_obs: jnp.array, action: jnp.array) -> jnp.array:
         """Computes the cost for the difference between current velocity and commanded velocity"""
         if self.encode_angle:
-            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+            if self._include_ee_orientation:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
+            else:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
         current_base_vel = next_obs[..., 3:6]
         current_ee_vel = next_obs[..., 9:12]
         current_vel = jnp.concatenate([current_base_vel, current_ee_vel], axis=-1)
+        if self._include_ee_orientation:
+            current_ee_ang_vel = next_obs[..., 15:18]
+            current_vel = jnp.concatenate([current_vel, current_ee_ang_vel], axis=-1)
         action_diff = current_vel - action
         action_diff_cost = -(action_diff ** 2).sum(-1)
         return action_diff_cost
@@ -426,8 +452,12 @@ class SpotEnvReward:
 class SpotSimEnv:
     max_steps: int = 200
     _dt: float = 1 / 10.0
-    dim_action: Tuple[int] = (6,)
-    _angle_idx: int = 2
+    _include_ee_orientation: bool = True
+    dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
+    if _include_ee_orientation:
+        _angle_idx: list = [2, 12, 13, 14]
+    else:
+        _angle_idx: int = 2
     _domain_lower = SpotSim._domain_lower
     _domain_upper = SpotSim._domain_upper
 
@@ -465,7 +495,10 @@ class SpotSimEnv:
         self.ctrl_cost_weight = ctrl_cost_weight
         self.ctrl_diff_weight = ctrl_diff_weight
         self.encode_angle: bool = encode_angle
-        self.dim_state: Tuple[int] = (13,) if encode_angle else (12,)
+        if self._include_ee_orientation:
+            self.dim_state: Tuple[int] = (22,) if encode_angle else (18,)
+        else:
+            self.dim_state: Tuple[int] = (13,) if encode_angle else (12,)
         self._rds_key = jax.random.PRNGKey(seed)
         self.max_steps = max_steps
 
@@ -474,7 +507,7 @@ class SpotSimEnv:
         self.max_velocity_ee = jnp.clip(max_velocity_ee, 0.0, 1.0)
 
         # initialize dynamics and observation noise models
-        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=False)
+        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=False, include_ee_orientation=self._include_ee_orientation)
 
         # set deffault params
         self._set_spot_params()
@@ -532,6 +565,7 @@ class SpotSimEnv:
             rng_key=reset_key,
             domain_lower=self._domain_lower,
             domain_upper=self._domain_upper,
+            include_ee_orientation=self._include_ee_orientation,
         )
 
         self._time = 0
@@ -545,7 +579,9 @@ class SpotSimEnv:
         """Performs one step in the environment
 
         Args:
-            action: array of size (6,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz]
+            action: 
+                - array of size (6,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz]
+                - array of size (9,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz, ee_vrx, ee_vry, ee_vrz]
             rng_key: rng key for the observation noise (optional)
         """
 
@@ -558,6 +594,10 @@ class SpotSimEnv:
         action = action.at[3].set(self.max_velocity_ee * action[3])
         action = action.at[4].set(self.max_velocity_ee * action[4])
         action = action.at[5].set(self.max_velocity_ee * action[5])
+        if self._include_ee_orientation:
+            action = action.at[6].set(self.max_velocity_ee * action[6])
+            action = action.at[7].set(self.max_velocity_ee * action[7])
+            action = action.at[8].set(self.max_velocity_ee * action[8])
         rng_key = self.rds_key if rng_key is None else rng_key
 
         # handle action delay
@@ -601,7 +641,10 @@ class SpotSimEnv:
         self, state: jnp.array, rng_key: Optional[jax.random.PRNGKey] = None
     ) -> jnp.array:
         """Adds observation noise to the state"""
-        assert state.shape[-1] == 12
+        if self._include_ee_orientation:
+            assert state.shape[-1] == 18
+        else:
+            assert state.shape[-1] == 12
         rng_key = self.rds_key if rng_key is None else rng_key
 
         # add observation noise
@@ -612,12 +655,24 @@ class SpotSimEnv:
         else:
             obs = state
 
-        # encode angle to sin(theta) and cos(theta) if desired
+        # encode angles if desired
         if self.encode_angle:
-            obs = encode_angles(obs, self._angle_idx)
-        assert (obs.shape[-1] == 13 and self.encode_angle) or (
-            obs.shape[-1] == 12 and not self.encode_angle
-        )
+            if self._include_ee_orientation:
+                indices_in_encoded = [self._angle_idx[0], self._angle_idx[1] + 1, self._angle_idx[2] + 2, self._angle_idx[3] + 3]
+                obs = encode_angles(obs, indices_in_encoded[0])
+                obs = encode_angles(obs, indices_in_encoded[1])
+                obs = encode_angles(obs, indices_in_encoded[2])
+                obs = encode_angles(obs, indices_in_encoded[3])
+            else:
+                obs = encode_angles(obs, self._angle_idx)
+        if self._include_ee_orientation:
+            assert (obs.shape[-1] == 22 and self.encode_angle) or (
+                obs.shape[-1] == 18 and not self.encode_angle
+            )
+        else:
+            assert (obs.shape[-1] == 13 and self.encode_angle) or (
+                obs.shape[-1] == 12 and not self.encode_angle
+            )
         return obs
 
     def _get_delayed_action(self, action: jnp.array) -> Tuple[jnp.array, jnp.array]:
@@ -652,11 +707,15 @@ class SpotSimEnv:
         return self._time
 
     def _set_spot_params(self):
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
+        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, SPOT_DEFAULT_OBSERVATION_NOISE_STD
+        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
 
-        self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS
-        self._obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD
+        if self._include_ee_orientation:
+            self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
+            self._obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
+        else:
+            self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS
+            self._obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD
 
 
 if __name__ == "__main__":

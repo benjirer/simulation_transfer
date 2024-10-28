@@ -52,6 +52,71 @@ SPOT_DEFAULT_OBSERVATION_NOISE_STD: jnp.array = 0.1 * jnp.exp(
     )
 )
 
+SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION: Dict = {
+    "alpha_base_1": 0.36060643,
+    "alpha_base_2": 0.5552592,
+    "alpha_base_3": 0.31399533,
+    "alpha_ee_1": 0.03760632,
+    "alpha_ee_2": -0.00998792,
+    "alpha_ee_3": 0.4368394,
+    "beta_base_1": 0.0,
+    "beta_base_2": 0.0,
+    "beta_base_3": 0.0,
+    "beta_base_4": -0.00609878,
+    "beta_base_5": -0.00455354,
+    "beta_base_6": 0.00350315,
+    "beta_ee_1": 0.0,
+    "beta_ee_2": 0.0,
+    "beta_ee_3": 0.0,
+    "beta_ee_4": -0.0235504,
+    "beta_ee_5": 0.0039239,
+    "beta_ee_6": 0.00066999,
+    "gamma_base_1": 1.0,
+    "gamma_base_2": 1.0,
+    "gamma_base_3": 1.0,
+    "gamma_ee_1": 1.0,
+    "gamma_ee_2": 1.0,
+    "gamma_ee_3": 1.0,
+    # include EE orientation, TODO: need to get these from the new data
+    "alpha_ee_ang_1": 0.0,
+    "alpha_ee_ang_2": 0.0,
+    "alpha_ee_ang_3": 0.0,
+    "beta_ee_ang_1": 0.0,
+    "beta_ee_ang_2": 0.0,
+    "beta_ee_ang_3": 0.0,
+    "beta_ee_ang_4": 0.0,
+    "beta_ee_ang_5": 0.0,
+    "beta_ee_ang_6": 0.0,
+    "gamma_ee_ang_1": 0.0,
+    "gamma_ee_ang_2": 0.0,
+    "gamma_ee_ang_3": 0.0,
+}
+
+SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION: jnp.array = 0.1 * jnp.exp(
+    jnp.array(
+        [
+            -3.1841354,
+            -3.6705942,
+            -3.387062,
+            -2.064331,
+            -2.4769685,
+            -1.7474595,
+            -3.0793405,
+            -3.1900687,
+            -3.8907578,
+            -1.6901332,
+            -1.4695036,
+            -2.0794985,
+            # include EE orientation, TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    )
+)
 ################################ Set 1 ################################
 
 spot_model_alpha_set_1: Dict = {
@@ -732,6 +797,45 @@ bounds_spot_model_params: Dict = {
     "gamma_ee_3": (0.9, 1.8),
 }
 
+bounds_spot_model_params_with_ee_orientation: Dict = {
+    "alpha_base_1": (0.0, 0.8),
+    "alpha_base_2": (0.0, 0.8),
+    "alpha_base_3": (0.0, 0.8),
+    "alpha_ee_1": (0.0, 0.2),
+    "alpha_ee_2": (0.0, 0.2),
+    "alpha_ee_3": (0.0, 0.6),
+    "beta_base_1": (-0.003, 0.003),
+    "beta_base_2": (-0.003, 0.003),
+    "beta_base_3": (-0.003, 0.003),
+    "beta_base_4": (-0.01, 0.01),
+    "beta_base_5": (-0.01, 0.01),
+    "beta_base_6": (-0.01, 0.01),
+    "beta_ee_1": (-0.003, 0.003),
+    "beta_ee_2": (-0.003, 0.003),
+    "beta_ee_3": (-0.003, 0.003),
+    "beta_ee_4": (-0.01, 0.01),
+    "beta_ee_5": (-0.01, 0.01),
+    "beta_ee_6": (-0.01, 0.01),
+    "gamma_base_1": (0.9, 1.8),
+    "gamma_base_2": (0.9, 1.8),
+    "gamma_base_3": (0.9, 1.8),
+    "gamma_ee_1": (0.9, 1.8),
+    "gamma_ee_2": (0.9, 1.8),
+    "gamma_ee_3": (0.9, 1.8),
+    "alpha_ee_ang_1": (0.0, 1.0),
+    "alpha_ee_ang_2": (0.0, 1.0),
+    "alpha_ee_ang_3": (0.0, 1.0),
+    "beta_ee_ang_1": (-0.1, 0.1),
+    "beta_ee_ang_2": (-0.1, 0.1),
+    "beta_ee_ang_3": (-0.1, 0.1),
+    "beta_ee_ang_4": (-0.1, 0.1),
+    "beta_ee_ang_5": (-0.1, 0.1),
+    "beta_ee_ang_6": (-0.1, 0.1),
+    "gamma_ee_ang_1": (0.9, 1.8),
+    "gamma_ee_ang_2": (0.9, 1.8),
+    "gamma_ee_ang_3": (0.9, 1.8),
+}
+
 ################################ Normalization Stats ################################
 # using all datasets
 
@@ -893,6 +997,256 @@ SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE: Dict = {
             0.459,
             0.321,
             0.184,
+        ]
+    ),
+}
+
+SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION: Dict = {
+    "x_mean": jnp.array(
+        [
+            0.887,
+            0.148,
+            0.06,
+            0.01,
+            0.003,
+            -0.0,
+            1.911,
+            0.198,
+            0.475,
+            0.011,
+            0.003,
+            -0.002,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            # normal actions
+            0.02,
+            -0.001,
+            -0.003,
+            0.028,
+            -0.002,
+            -0.007,
+            # new actions: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "x_std": jnp.array(
+        [
+            0.994,
+            0.332,
+            0.204,
+            0.436,
+            0.191,
+            0.249,
+            1.021,
+            0.39,
+            0.2,
+            0.459,
+            0.321,
+            0.184,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            # normal actions
+            0.438,
+            0.157,
+            0.232,
+            0.194,
+            0.207,
+            0.192,
+            # new actions: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "y_mean": jnp.array(
+        [
+            0.889,
+            0.148,
+            0.06,
+            0.01,
+            0.003,
+            -0.0,
+            1.913,
+            0.198,
+            0.475,
+            0.011,
+            0.003,
+            -0.002,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "y_std": jnp.array(
+        [
+            0.994,
+            0.332,
+            0.204,
+            0.436,
+            0.191,
+            0.249,
+            1.021,
+            0.39,
+            0.2,
+            0.459,
+            0.321,
+            0.184,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+}
+
+SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE: Dict = {
+    "x_mean": jnp.array(
+        [
+            0.887,
+            0.148,
+            0.058,
+            0.978,
+            0.01,
+            0.003,
+            -0.0,
+            1.911,
+            0.198,
+            0.475,
+            0.011,
+            0.003,
+            -0.002,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            # normal actions
+            0.02,
+            -0.001,
+            -0.003,
+            0.028,
+            -0.002,
+            -0.007,
+            # new actions: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "x_std": jnp.array(
+        [
+            0.994,
+            0.332,
+            0.194,
+            0.052,
+            0.436,
+            0.191,
+            0.249,
+            1.021,
+            0.39,
+            0.2,
+            0.459,
+            0.321,
+            0.184,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            # normal actions
+            0.438,
+            0.157,
+            0.232,
+            0.194,
+            0.207,
+            0.192,
+            # new actions: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "y_mean": jnp.array(
+        [
+            0.889,
+            0.148,
+            0.058,
+            0.978,
+            0.01,
+            0.003,
+            -0.0,
+            1.913,
+            0.198,
+            0.475,
+            0.011,
+            0.003,
+            -0.002,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    ),
+    "y_std": jnp.array(
+        [
+            0.994,
+            0.332,
+            0.194,
+            0.052,
+            0.436,
+            0.191,
+            0.249,
+            1.021,
+            0.39,
+            0.2,
+            0.459,
+            0.321,
+            0.184,
+            # new states: TODO: need to get these from the new data
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ]
     ),
 }

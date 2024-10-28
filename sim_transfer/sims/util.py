@@ -626,12 +626,19 @@ def sample_pos_and_goal_spot(
     rng_key: jax.random.PRNGKey,
     domain_lower: jnp.array,
     domain_upper: jnp.array,
+    include_ee_orientation: bool = False,
     goal_dim: int = 3,
     state_dim: int = 12,
+    goal_dim_with_ee_orientation: int = 6,
+    state_dim_with_ee_orientation: int = 18,
     standard_init_state: jnp.array = jnp.array(
         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.92, -0.012, 0.6, 0.0, 0.0, 0.0]
     ),
     standard_init_goal: jnp.array = jnp.array([2.0, 0.0, 0.6]),
+    standard_init_state_with_ee_orientation: jnp.array = jnp.array(
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.92, -0.012, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    ),
+    standard_init_goal_with_ee_orientation: jnp.array = jnp.array([2.0, 0.0, 0.6, 0.0, 0.0, 0.0]),
     max_goal_distance_radius: Optional[float] = 2.0,
     margins: jnp.array = jnp.array(
         [
@@ -649,8 +656,37 @@ def sample_pos_and_goal_spot(
             0.001,
         ]
     ),
+    margins_with_ee_orientation: jnp.array = jnp.array(
+        [
+            0.1,
+            0.1,
+            0.1 * jnp.pi,
+            0.001,
+            0.001,
+            0.001,
+            0.1,
+            0.1,
+            0.1,
+            0.001,
+            0.001,
+            0.001,
+            0.1 * jnp.pi,
+            0.1 * jnp.pi,
+            0.1 * jnp.pi,
+            0.001,
+            0.001,
+            0.001,
+        ]
+    ),
 ) -> Tuple[jnp.array, jnp.array]:
     """Sample a random initial position and goal for the spot robot"""
+
+    if include_ee_orientation:
+        goal_dim = goal_dim_with_ee_orientation
+        state_dim = state_dim_with_ee_orientation
+        standard_init_state = standard_init_state_with_ee_orientation
+        standard_init_goal = standard_init_goal_with_ee_orientation
+        margins = margins_with_ee_orientation
 
     # check if the dimensions are correct
     assert (
@@ -666,7 +702,7 @@ def sample_pos_and_goal_spot(
         len(domain_upper) >= state_dim
     ), f"Invalid domain upper dim {len(domain_upper)}"
 
-    # check if state is within the domain (handle theta separately)
+    # check if state is within the domain (handle angles separately)
     assert jnp.all(
         (standard_init_state[:2] - margins[:2]) >= domain_lower[:2]
     ), f"State - margins is not within the domain"
@@ -674,10 +710,10 @@ def sample_pos_and_goal_spot(
         (standard_init_state[:2] + margins[:2]) <= domain_upper[:2]
     ), f"State + margins is not within the domain"
     assert jnp.all(
-        (standard_init_state[3:] - margins[3:]) >= domain_lower[3:12]
+        (standard_init_state[3:12] - margins[3:12]) >= domain_lower[3:12]
     ), f"State - margins is not within the domain"
     assert jnp.all(
-        (standard_init_state[3:] + margins[3:]) <= domain_upper[3:12]
+        (standard_init_state[3:12] + margins[3:12]) <= domain_upper[3:12]
     ), f"State + margins is not within the domain"
     assert jnp.all(
         (project_angle(standard_init_state[2:3] - margins[2])) >= domain_lower[2]
@@ -685,15 +721,42 @@ def sample_pos_and_goal_spot(
     assert jnp.all(
         (project_angle(standard_init_state[2:3] + margins[2])) <= domain_upper[2]
     ), f"Theta + margins is not within the domain"
+    if include_ee_orientation:
+        assert jnp.all(
+            (project_angle(standard_init_state[12:15] - margins[12:15])) >= domain_lower[12:15]
+        ), f"EE angles - margins is not within the domain"
+        assert jnp.all(
+            (project_angle(standard_init_state[12:15] + margins[12:15])) <= domain_upper[12:15]
+        ), f"EE angles + margins is not within the domain"
+        assert jnp.all(
+            (standard_init_state[15:18] - margins[15:18]) >= domain_lower[15:18]
+        ), f"EE state - margins is not within the domain"
+        assert jnp.all(
+            (standard_init_state[15:18] + margins[15:18]) <= domain_upper[15:18]
+        ), f"EE state + margins is not within the domain"
 
     # check if the goal is within the domain
     if max_goal_distance_radius is None:
-        assert jnp.all(
-            (standard_init_goal - margins[6:9]) >= domain_lower[6:9]
-        ), f"Goal - margins is not within the domain"
-        assert jnp.all(
-            (standard_init_goal + margins[6:9]) <= domain_upper[6:9]
-        ), f"Goal + margins is not within the domain"
+        if include_ee_orientation:
+            assert jnp.all(
+                (standard_init_goal - margins[6:9]) >= domain_lower[6:9]
+            ), f"Goal - margins is not within the domain"
+            assert jnp.all(
+                (standard_init_goal + margins[6:9]) <= domain_upper[6:9]
+            ), f"Goal + margins is not within the domain"
+        else:
+            assert jnp.all(
+                (standard_init_goal[:3] - margins[6:9]) >= domain_lower[6:9]
+            ), f"Goal - margins is not within the domain"
+            assert jnp.all(
+                (standard_init_goal[:3]  + margins[6:9]) <= domain_upper[6:9]
+            ), f"Goal + margins is not within the domain"
+            assert jnp.all(
+                (standard_init_goal[3:] - margins[12:15]) >= domain_lower[12:15]
+            ), f"Goal - margins is not within the domain"
+            assert jnp.all(
+                (standard_init_goal[3:] + margins[12:15]) <= domain_upper[12:15]
+            ), f"Goal + margins is not within the domain"
 
     (
         key_goal,
@@ -725,13 +788,25 @@ def sample_pos_and_goal_spot(
         key_ee_pos, shape=(3,), minval=-margins[6:9], maxval=margins[6:9]
     )
     # ee vel
-    init_ee_vel = standard_init_state[9:] + jnp.array(
+    init_ee_vel = standard_init_state[9:12] + jnp.array(
         margins[9:12]
     ) * jax.random.normal(key_ee_vel, shape=(3,))
+    # ee orientation
+    if include_ee_orientation:
+        init_ee_orientation = standard_init_state[12:15] + jax.random.uniform(
+            key_ee_pos, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+        )
+        init_ee_ang_vel = standard_init_state[15:18] + jnp.array(
+            margins[15:18]
+        ) * jax.random.normal(key_ee_vel, shape=(3,))
 
     init_state = jnp.concatenate(
         [init_base_pos, init_theta, init_base_vel, init_ee_pos, init_ee_vel]
     )
+    if include_ee_orientation:
+        init_state = jnp.concatenate(
+            [init_state, init_ee_orientation, init_ee_ang_vel]
+        )
     assert init_state.shape == (
         state_dim,
     ), f"Invalid init state shape {init_state.shape}"
@@ -739,7 +814,11 @@ def sample_pos_and_goal_spot(
     # sample new random goal
     if max_goal_distance_radius is not None:
 
-        key_goal_angle, key_goal_distance, key_goal_z = jax.random.split(key_goal, 3)
+        if include_ee_orientation:
+            key_goal_angle, key_goal_distance, key_goal_z, key_ee_orientation_goal = jax.random.split(key_goal, 4)
+
+        else:
+            key_goal_angle, key_goal_distance, key_goal_z = jax.random.split(key_goal, 3)
 
         # sample goal x,y in front of the robot (direction offset within [-π/2, π/2] relative to theta)
         angle_offset = jax.random.uniform(
@@ -764,14 +843,29 @@ def sample_pos_and_goal_spot(
             key_goal_z, shape=(), minval=domain_lower[8], maxval=domain_upper[8]
         )
 
-        init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z])])
+        if include_ee_orientation:
+            # sample goal ee orientation
+            ee_orientation_goal = standard_init_goal[3:] + jax.random.uniform(
+                key_ee_orientation_goal, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+            )
+            init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z]), ee_orientation_goal])
+        else:
+            init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z])])
     else:
-        init_goal = standard_init_goal + jax.random.uniform(
+        init_goal = standard_init_goal[:3] + jax.random.uniform(
             key_goal, shape=(3,), minval=-margins[6:9], maxval=margins[6:9]
         )
         init_goal = jnp.minimum(
             jnp.maximum(init_goal, domain_lower[6:9]), domain_upper[6:9]
         )
+        if include_ee_orientation:
+            init_goal_ee = standard_init_goal[3:] + jax.random.uniform(
+                key_goal, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+            )
+            init_goal_ee = jnp.minimum(
+                jnp.maximum(init_goal_ee, domain_lower[12:15]), domain_upper[12:15]
+            )
+            init_goal = jnp.concatenate([init_goal, init_goal_ee])
 
     return init_state, init_goal
 
@@ -794,6 +888,14 @@ if __name__ == "__main__":
             -2.5,
             0.1,
             # ee vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee orientation
+            -jnp.pi,
+            -jnp.pi,
+            -jnp.pi,
+            # ee ang vel
             -1.0,
             -1.0,
             -1.0,
@@ -825,6 +927,14 @@ if __name__ == "__main__":
             1.0,
             1.0,
             1.0,
+            # ee orientation
+            jnp.pi,
+            jnp.pi,
+            jnp.pi,
+            # ee ang vel
+            1.0,
+            1.0,
+            1.0,
             # base action
             1.0,
             1.0,
@@ -836,22 +946,22 @@ if __name__ == "__main__":
         ]
     )
     init_state, init_goal = sample_pos_and_goal_spot(
-        rng_key, domain_lower, domain_upper
+        rng_key, domain_lower, domain_upper, include_ee_orientation=True
     )
     print("init_state", init_state)
     print("init_goal", init_goal)
-    assert init_state.shape == (12,), f"Invalid init state shape {init_state.shape}"
-    assert init_goal.shape == (3,), f"Invalid init goal shape {init_goal.shape}"
+    assert init_state.shape == (18,), f"Invalid init state shape {init_state.shape}"
+    assert init_goal.shape == (6,), f"Invalid init goal shape {init_goal.shape}"
     print("Sampled init state and goal successfully")
 
     # test sample_pos_and_goal_spot with max_goal_distance_radius
     init_state, init_goal = sample_pos_and_goal_spot(
-        rng_key, domain_lower, domain_upper, max_goal_distance_radius=2.0
+        rng_key, domain_lower, domain_upper, max_goal_distance_radius=2.0, include_ee_orientation=True
     )
     print("init_state", init_state)
     print("init_goal", init_goal)
-    assert init_state.shape == (12,), f"Invalid init state shape {init_state.shape}"
-    assert init_goal.shape == (3,), f"Invalid init goal shape {init_goal.shape}"
+    assert init_state.shape == (18,), f"Invalid init state shape {init_state.shape}"
+    assert init_goal.shape == (6,), f"Invalid init goal shape {init_goal.shape}"
     print("Sampled init state and goal successfully with max_goal_distance_radius")
 
     # sample several init states and goals
@@ -861,7 +971,7 @@ if __name__ == "__main__":
     keys = jax.random.split(rng_key, n_samples)
     for _ in range(n_samples):
         init_state, init_goal = sample_pos_and_goal_spot(
-            keys[_], domain_lower, domain_upper
+            keys[_], domain_lower, domain_upper, include_ee_orientation=True
         )
         init_states.append(init_state)
         init_goals.append(init_goal)
@@ -869,11 +979,11 @@ if __name__ == "__main__":
     init_goals = jnp.stack(init_goals)
     assert init_states.shape == (
         n_samples,
-        12,
+        18,
     ), f"Invalid init states shape {init_states.shape}"
     assert init_goals.shape == (
         n_samples,
-        3,
+        6,
     ), f"Invalid init goals shape {init_goals.shape}"
     print("Sampled multiple init states and goals successfully")
 

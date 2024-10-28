@@ -1350,10 +1350,10 @@ class SpotDynamicsModel(DynamicsModel):
 
     def expand_x(self, x):
         if self.include_ee_orientation:
-            theta = x[..., self.angle_idx[0]]
-            ee_rx = x[..., self.angle_idx[1]]
-            ee_ry = x[..., self.angle_idx[2]]
-            ee_rz = x[..., self.angle_idx[3]]
+            theta = jnp.atleast_1d(x[..., self.angle_idx[0]])
+            ee_rx = jnp.atleast_1d(x[..., self.angle_idx[1]])
+            ee_ry = jnp.atleast_1d(x[..., self.angle_idx[2]])
+            ee_rz = jnp.atleast_1d(x[..., self.angle_idx[3]])
             x_expanded = jnp.concatenate(
                 [
                     x[..., 0 : self.angle_idx[0]],
@@ -1602,4 +1602,126 @@ if __name__ == "__main__":
         plt.title("Simulation of Car for " + str(int(horizon)))
         plt.show()
 
-    simulate_car()
+
+    # simulate_car()
+
+     # Test function for the SpotDynamicsModel with include_ee_orientation = True
+    def test_spot_dynamics_model_with_ee_orientation_trajectory():
+        # Create an instance of the model with include_ee_orientation=True
+        dt = 0.1  # Time step
+        model = SpotDynamicsModel(
+            dt=dt,
+            encode_angle=False,
+            input_in_local_frame=True,
+            include_ee_orientation=True
+        )
+
+        # Define initial state x0
+        x0 = jnp.zeros(model.x_dim)
+        x0 = x0.at[0].set(0.0)    # Base x position
+        x0 = x0.at[1].set(0.0)    # Base y position
+        x0 = x0.at[2].set(0.0)    # Base orientation angle theta
+        x0 = x0.at[3:6].set(0.0)  # Base velocities
+        x0 = x0.at[6:9].set(0.0)  # End-effector positions
+        x0 = x0.at[9:12].set(0.0) # End-effector velocities
+        x0 = x0.at[12:15].set(0.0) # End-effector orientations
+        x0 = x0.at[15:18].set(0.0) # End-effector angular velocities
+
+        # Define control inputs over time
+        T = 200  # Number of time steps
+        u = jnp.zeros((T, model.u_dim))
+        # For simplicity, let's define constant control inputs
+        u = u.at[:, 0].set(0.1)  # Base linear velocity in x
+        u = u.at[:, 1].set(0.0)  # Base linear velocity in y
+        u = u.at[:, 2].set(0.0)  # Base angular velocity
+        u = u.at[:, 3].set(0.0)  # End-effector linear velocity in x
+        u = u.at[:, 4].set(0.0)  # End-effector linear velocity in y
+        u = u.at[:, 5].set(0.0)  # End-effector linear velocity in z
+        u = u.at[:, 6].set(10)  # End-effector angular velocity in x
+        u = u.at[:, 7].set(0.0)  # End-effector angular velocity in y
+        u = u.at[:, 8].set(0.0)  # End-effector angular velocity in z
+
+
+        # Use default parameters
+        params = SpotParams()
+
+        # Simulate the trajectory
+        x = x0
+        trajectory = [x0]
+        for t in range(T):
+            x = model.next_step(x, u[t], params)
+            trajectory.append(x)
+
+        # Convert trajectory to an array
+        trajectory = jnp.stack(trajectory)
+
+        # Extract positions for plotting
+        base_positions = trajectory[:, 0:2]
+        ee_positions = trajectory[:, 6:9]  # End-effector positions x, y, z
+        ee_orientations = trajectory[:, 12:15]  # End-effector orientations rx, ry, rz
+
+        # Plot the base trajectory
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.plot(base_positions[:, 0], base_positions[:, 1], 'b.-', label='Base')
+        plt.xlabel('Base X Position')
+        plt.ylabel('Base Y Position')
+        plt.title('Base Trajectory')
+        plt.legend()
+        plt.grid(True)
+
+        # Plot the end-effector trajectory
+        plt.subplot(1, 2, 2)
+        plt.plot(ee_positions[:, 0], ee_positions[:, 1], 'r.-', label='End-Effector')
+        plt.xlabel('EE X Position')
+        plt.ylabel('EE Y Position')
+        plt.title('End-Effector Trajectory')
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.savefig('spot_dynamics_model_with_ee_orientation_trajectory.png')
+        # Plot the end-effector position with orientation as arrows in 3D
+        from mpl_toolkits.mplot3d import Axes3D
+        from scipy.spatial.transform import Rotation as R
+
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Plot the end-effector positions
+        ax.plot(ee_positions[:, 0], ee_positions[:, 1], ee_positions[:, 2], 'r.-', label='End-Effector')
+
+        # Define the number of orientation arrows to plot (e.g., 10 evenly spaced points)
+        num_arrows = 10
+        arrow_indices = jnp.linspace(0, T, num_arrows, endpoint=False, dtype=int)
+
+        # Plot orientation arrows at selected time steps
+        for idx in arrow_indices:
+            position = ee_positions[idx]
+            orientation = ee_orientations[idx]
+
+            # Convert orientation angles (rx, ry, rz) to a rotation matrix
+            rotation = R.from_euler('xyz', orientation)
+
+            # Assume the forward direction vector is along the x-axis in the local frame
+            forward_vector = rotation.apply([1, 0, 0])
+
+            # Plot the orientation arrow
+            ax.quiver(
+                position[0], position[1], position[2],          # Starting point of the arrow
+                forward_vector[0], forward_vector[1], forward_vector[2],  # Direction components
+                length=0.1, normalize=True, color='k'
+            )
+
+        ax.set_xlabel('EE X Position')
+        ax.set_ylabel('EE Y Position')
+        ax.set_zlabel('EE Z Position')
+        ax.set_title('End-Effector Trajectory with Orientation')
+        ax.legend()
+        plt.savefig('spot_dynamics_model_with_ee_orientation_trajectory_3d.png')
+
+
+
+    # Run the test function
+    test_spot_dynamics_model_with_ee_orientation_trajectory()

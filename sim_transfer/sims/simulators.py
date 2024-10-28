@@ -2005,10 +2005,14 @@ class StackedActionSimWrapper(FunctionSimulator):
 
 class SpotSim(FunctionSimulator):
     _dt: float = 1 / 10.0
-    _angle_idx: int = 2
+    _include_ee_orientation: bool = True
+    if _include_ee_orientation:
+        _angle_idx: list = [2, 12, 13, 14]
+    else:
+        _angle_idx: int = 2
 
     # domain for simulator prior
-    _domain_lower = jnp.array(
+    _domain_lower_no_ee = jnp.array(
         [
             # base pos
             -2.5,
@@ -2036,7 +2040,7 @@ class SpotSim(FunctionSimulator):
             -1.0,
         ]
     )
-    _domain_upper = jnp.array(
+    _domain_upper_no_ee = jnp.array(
         [
             # base pos
             4.5,
@@ -2065,6 +2069,91 @@ class SpotSim(FunctionSimulator):
         ]
     )
 
+    _domain_lower_with_ee = jnp.array(
+        [
+            # base pos
+            -2.5,
+            -2.5,
+            -jnp.pi,
+            # base vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee pos
+            -2.5,
+            -2.5,
+            0.1,
+            # ee vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee orientation
+            -jnp.pi,
+            -jnp.pi,
+            -jnp.pi,
+            # ee angular vel
+            -1.0,
+            -1.0,
+            -1.0,
+            # base action
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee action
+            -1.0,
+            -1.0,
+            -1.0,
+            # ee angular action
+            -1.0,
+            -1.0,
+            -1.0,
+        ]
+    )
+
+    _domain_upper_with_ee = jnp.array(
+        [
+            # base pos
+            4.5,
+            2.5,
+            jnp.pi,
+            # base vel
+            1.0,
+            1.0,
+            1.0,
+            # ee pos
+            4.5,
+            2.5,
+            1.8,
+            # ee vel
+            1.0,
+            1.0,
+            1.0,
+            # ee orientation
+            jnp.pi,
+            jnp.pi,
+            jnp.pi,
+            # ee angular vel
+            1.0,
+            1.0,
+            1.0,
+            # base action
+            1.0,
+            1.0,
+            1.0,
+            # ee action
+            1.0,
+            1.0,
+            1.0,
+            # ee angular action
+            1.0,
+            1.0,
+            1.0,
+        ]
+    )
+    
+    _domain_lower = _domain_lower_no_ee if not _include_ee_orientation else _domain_lower_with_ee
+    _domain_upper = _domain_upper_no_ee if not _include_ee_orientation else _domain_upper_with_ee
+
     # domain for generating data
     _domain_lower_dataset = _domain_lower
     _domain_upper_dataset = _domain_upper
@@ -2080,10 +2169,16 @@ class SpotSim(FunctionSimulator):
         Args:
             encode_angle: (bool) whether to encode the heading angle (theta) as sin(theta) and cos(theta)
         """
-        _output_size = 13 if encode_angle else 12
-        FunctionSimulator.__init__(
-            self, input_size=19 if encode_angle else 18, output_size=_output_size
-        )
+        if self._include_ee_orientation:
+            _output_size = 22 if encode_angle else 18
+            FunctionSimulator.__init__(
+                self, input_size=31 if encode_angle else 27, output_size=_output_size
+            )
+        else:
+            _output_size = 13 if encode_angle else 12
+            FunctionSimulator.__init__(
+                self, input_size=19 if encode_angle else 18, output_size=_output_size
+            )
 
         # set default params
         self._set_default_params()
@@ -2098,8 +2193,11 @@ class SpotSim(FunctionSimulator):
 
         # set model
         self.encode_angle = encode_angle
-        self.model = SpotDynamicsModel(self._dt, encode_angle=encode_angle)
-        self.state_action_split_idx = 13 if encode_angle else 12
+        self.model = SpotDynamicsModel(self._dt, encode_angle=encode_angle, include_ee_orientation=self._include_ee_orientation)
+        if self._include_ee_orientation:
+            self.state_action_split_idx = 22 if encode_angle else 18
+        else:
+            self.state_action_split_idx = 13 if encode_angle else 12
 
         # set parameter bounds
         _bounds_spot_model_params = self._bounds_spot_model_params
@@ -2184,25 +2282,43 @@ class SpotSim(FunctionSimulator):
         from sim_transfer.sims.spot_sim_config import (
             SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE,
             SPOT_MODEL_NORMALIZATION_STATS,
+            SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE,
+            SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION,
         )
 
         if self.encode_angle:
-            stats = {
-                "x_mean": jnp.zeros(self.input_size),
-                "x_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["x_std"],
-                "y_mean": jnp.zeros(self.output_size),
-                "y_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["y_std"],
-            }
+            if self._include_ee_orientation:
+                stats = {
+                    "x_mean": jnp.zeros(self.input_size),
+                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE["x_std"],
+                    "y_mean": jnp.zeros(self.output_size),
+                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE["y_std"],
+                }
+            else:
+                stats = {
+                    "x_mean": jnp.zeros(self.input_size),
+                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["x_std"],
+                    "y_mean": jnp.zeros(self.output_size),
+                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["y_std"],
+                }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
             ), "std and mean should have same shape"
         else:
-            stats = {
-                "x_mean": jnp.zeros(self.input_size),
-                "x_std": SPOT_MODEL_NORMALIZATION_STATS["x_std"],
-                "y_mean": jnp.zeros(self.output_size),
-                "y_std": SPOT_MODEL_NORMALIZATION_STATS["y_std"],
-            }
+            if self._include_ee_orientation:
+                stats = {
+                    "x_mean": jnp.zeros(self.input_size),
+                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["x_std"],
+                    "y_mean": jnp.zeros(self.output_size),
+                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["y_std"],
+                }
+            else:
+                stats = {
+                    "x_mean": jnp.zeros(self.input_size),
+                    "x_std": SPOT_MODEL_NORMALIZATION_STATS["x_std"],
+                    "y_mean": jnp.zeros(self.output_size),
+                    "y_std": SPOT_MODEL_NORMALIZATION_STATS["y_std"],
+                }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
             ), "std and mean should have same shape"
@@ -2234,11 +2350,25 @@ class SpotSim(FunctionSimulator):
         rng_key: jax.random.PRNGKey,
     ) -> jnp.ndarray:
         if self.encode_angle:
-            f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx)
-            y = f_decoded + obs_noise_std * jax.random.normal(
-                rng_key, shape=f_decoded.shape
-            )
-            y = encode_angles(y, angle_idx=self._angle_idx)
+            if self._include_ee_orientation:
+                indices_in_encoded = [self._angle_idx[0], self._angle_idx[1] + 1, self._angle_idx[2] + 2, self._angle_idx[3] + 3]
+                f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx[0])
+                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[1])
+                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[2])
+                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[3])
+                y = f_decoded + obs_noise_std * jax.random.normal(
+                    rng_key, shape=f_decoded.shape
+                )
+                y = encode_angles(y, angle_idx=indices_in_encoded[0])
+                y = encode_angles(y, angle_idx=indices_in_encoded[1])
+                y = encode_angles(y, angle_idx=indices_in_encoded[2])
+                y = encode_angles(y, angle_idx=indices_in_encoded[3])
+            else:
+                f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx)
+                y = f_decoded + obs_noise_std * jax.random.normal(
+                    rng_key, shape=f_decoded.shape
+                )
+                y = encode_angles(y, angle_idx=self._angle_idx)
         else:
             y = f_vals + obs_noise_std * jax.random.normal(rng_key, shape=f_vals.shape)
         assert f_vals.shape == y.shape
@@ -2266,76 +2396,89 @@ class SpotSim(FunctionSimulator):
     def _create_domain(self, lower: jnp.array, upper: jnp.array) -> Domain:
         """Creates the domain object from the given lower and up bounds."""
         if self.encode_angle:
-            return HypercubeDomainWithAngles(
-                angle_indices=[self._angle_idx], lower=lower, upper=upper
-            )
+            if self._include_ee_orientation:
+                return HypercubeDomainWithAngles(
+                    angle_indices=self._angle_idx, lower=lower, upper=upper
+                )
+            else:
+                return HypercubeDomainWithAngles(
+                    angle_indices=[self._angle_idx], lower=lower, upper=upper
+                )
         else:
             return HypercubeDomain(lower=lower, upper=upper)
         
     def _set_default_params(self):
         from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, bounds_spot_model_params
-        self._default_spot_model_params = SPOT_DEFAULT_PARAMS
-        self._bounds_spot_model_params = bounds_spot_model_params
+        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, bounds_spot_model_params_with_ee_orientation
+        if self._include_ee_orientation:
+            self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
+            self._bounds_spot_model_params = bounds_spot_model_params_with_ee_orientation
+        else:
+            self._default_spot_model_params = SPOT_DEFAULT_PARAMS
+            self._bounds_spot_model_params = bounds_spot_model_params
 
 
 if __name__ == "__main__":
     key1, key2 = jax.random.split(jax.random.PRNGKey(435349), 2)
     key_hf, key_lf = jax.random.split(key1, 2)
 
-    function_sim = GreenHouseSim(use_hf=True)
-    test_p, test_p_train = function_sim.sample_params(key1)
-    x, _ = function_sim._sample_x_data(key_hf, 64, 1)
-    param1 = function_sim._typical_params
-    f1 = function_sim.sample_function_vals(x, num_samples=4000, rng_key=key2)
-    f1 = function_sim.model.transform_state(f1)
-    import numpy as np
+    # function_sim = GreenHouseSim(use_hf=True)
+    # test_p, test_p_train = function_sim.sample_params(key1)
+    # x, _ = function_sim._sample_x_data(key_hf, 64, 1)
+    # param1 = function_sim._typical_params
+    # f1 = function_sim.sample_function_vals(x, num_samples=4000, rng_key=key2)
+    # f1 = function_sim.model.transform_state(f1)
+    # import numpy as np
 
-    #
-    f2 = function_sim._typical_f(x)
-    f2 = function_sim.model.transform_state(f2)
-    print(jnp.isnan(f1).any())
-    print(jnp.isnan(f2).any())
-    check = np.max(
-        np.abs(np.asarray(f1 - function_sim.model.transform_state(x[..., :16]))), axis=0
-    )
-    function_sim = GreenHouseSim(use_hf=False)
-    test_p, test_p_train = function_sim.sample_params(key1)
-    x, _ = function_sim._sample_x_data(key_lf, 64, 1)
-    param1 = function_sim._typical_params
-    f1 = function_sim.sample_function_vals(x, num_samples=4000, rng_key=key2)
-    f1 = function_sim.model.transform_state(f1)
-    f2 = function_sim._typical_f(x)
-    f2 = function_sim.model.transform_state(f2)
-    print(jnp.isnan(f1).any())
-    print(jnp.isnan(f2).any())
-    check = np.max(
-        np.abs(np.asarray(f1 - function_sim.model.transform_state(x[..., :16]))), axis=0
-    )
+    # #
+    # f2 = function_sim._typical_f(x)
+    # f2 = function_sim.model.transform_state(f2)
+    # print(jnp.isnan(f1).any())
+    # print(jnp.isnan(f2).any())
+    # check = np.max(
+    #     np.abs(np.asarray(f1 - function_sim.model.transform_state(x[..., :16]))), axis=0
+    # )
+    # function_sim = GreenHouseSim(use_hf=False)
+    # test_p, test_p_train = function_sim.sample_params(key1)
+    # x, _ = function_sim._sample_x_data(key_lf, 64, 1)
+    # param1 = function_sim._typical_params
+    # f1 = function_sim.sample_function_vals(x, num_samples=4000, rng_key=key2)
+    # f1 = function_sim.model.transform_state(f1)
+    # f2 = function_sim._typical_f(x)
+    # f2 = function_sim.model.transform_state(f2)
+    # print(jnp.isnan(f1).any())
+    # print(jnp.isnan(f2).any())
+    # check = np.max(
+    #     np.abs(np.asarray(f1 - function_sim.model.transform_state(x[..., :16]))), axis=0
+    # )
 
-    function_sim = SergioSim(5, 10, use_hf=False)
-    function_sim.sample_params(key1)
-    x, _ = function_sim._sample_x_data(key1, 1, 1)
-    param1 = function_sim._typical_params
-    f1 = function_sim.sample_function_vals(x, num_samples=1000, rng_key=key2)
-    f2 = function_sim._typical_f(x)
-    function_sim = SergioSim(5, 10, use_hf=True)
-    params = function_sim._typical_params
-    params = params._replace(
-        lam=param1.lam,
-    )
-    f3 = function_sim.evaluate_sim(x, params)
-    print(jnp.isnan(f1).any())
-    print(jnp.isnan(f2).any())
-    function_sim = RaceCarSim(use_blend=False, no_angular_velocity=True)
-    x, _ = function_sim._sample_x_data(key1, 1000, 1000)
+    # function_sim = SergioSim(5, 10, use_hf=False)
+    # function_sim.sample_params(key1)
+    # x, _ = function_sim._sample_x_data(key1, 1, 1)
+    # param1 = function_sim._typical_params
+    # f1 = function_sim.sample_function_vals(x, num_samples=1000, rng_key=key2)
+    # f2 = function_sim._typical_f(x)
+    # function_sim = SergioSim(5, 10, use_hf=True)
+    # params = function_sim._typical_params
+    # params = params._replace(
+    #     lam=param1.lam,
+    # )
+    # f3 = function_sim.evaluate_sim(x, params)
+    # print(jnp.isnan(f1).any())
+    # print(jnp.isnan(f2).any())
+    # function_sim = RaceCarSim(use_blend=False, no_angular_velocity=True)
+    # x, _ = function_sim._sample_x_data(key1, 1000, 1000)
 
-    f1 = function_sim.sample_function_vals(x, num_samples=10, rng_key=key2)
-    f2 = function_sim._typical_f(x)
-    print(jnp.isnan(f1).any())
-    print(jnp.isnan(f2).any())
+    # f1 = function_sim.sample_function_vals(x, num_samples=10, rng_key=key2)
+    # f2 = function_sim._typical_f(x)
+    # print(jnp.isnan(f1).any())
+    # print(jnp.isnan(f2).any())
 
     function_sim = SpotSim(encode_angle=True)
+    print(function_sim._angle_idx)
     x, _ = function_sim._sample_x_data(key1, 1000, 1000)
+
+    print(x.shape)
 
     f1 = function_sim.sample_function_vals(x, num_samples=10, rng_key=key2)
     f2 = function_sim._typical_f(x)
