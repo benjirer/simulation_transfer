@@ -48,6 +48,7 @@ def experiment(
     obtain_consecutive_data: int = 1,
     wandb_logging: bool = True,
     save_traj_local: bool = True,
+    include_ee_orientation: bool = True,
     # default model parameters
     likelihood_exponent: float = 1.0,
     bandwidth_svgd: float = 2.0,
@@ -140,6 +141,7 @@ def experiment(
         train_sac_only_from_init_states=train_sac_only_from_init_states,
         obtain_consecutive_data=obtain_consecutive_data,
         include_aleatoric_noise=include_aleatoric_noise,
+        include_ee_orientation=include_ee_orientation,
         # parameters model
         bnn_train_steps=bnn_train_steps,
         ll_std=learnable_likelihood_std,
@@ -251,7 +253,22 @@ def experiment(
             0.02,  # ee_vy
             0.02,  # ee_vz
         ]
+        if include_ee_orientation:
+            OUPUTSCALE_SPOT += [
+                0.2, # ee_rx_sin
+                0.2, # ee_rx_cos
+                0.2, # ee_ry_sin
+                0.2, # ee_ry_cos
+                0.2, # ee_rz_sin
+                0.2, # ee_rz_cos
+                0.2, # ee_vrx
+                0.2, # ee_vry
+                0.2, # ee_vrz
+            ]
         # OUPUTSCALE_SPOT = 1.0
+
+        print("In and output size of sim", sim.input_size, sim.output_size)
+        print("size of output scale", len(OUPUTSCALE_SPOT))
         sim = AdditiveSim(
             base_sims=[
                 sim,
@@ -267,6 +284,8 @@ def experiment(
         if predict_difference:
             sim = PredictStateChangeWrapper(sim)
 
+        print("size of normalization stats", sim.normalization_stats)
+        print("size of domain", sim.domain)
         model = BNN_FSVGD_SimPrior(
             **standard_bnn_params,
             normalization_stats=sim.normalization_stats,
@@ -325,6 +344,7 @@ def experiment(
         include_aleatoric_noise=bool(include_aleatoric_noise),
         predict_difference=bool(predict_difference),
         eval_bnn_model_on_all_offline_data=bool(eval_on_all_offline_data),
+        include_ee_orientation=include_ee_orientation,
     )
 
     # get policy from offline data
@@ -338,7 +358,7 @@ def experiment(
     if not skip_eval:
         # evaluate learned model
         # rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
-
+        
         # evaluate policy on learned model
         rl_from_offline_data.evaluate_policy(
             policy,
@@ -389,6 +409,7 @@ def main(args):
         obtain_consecutive_data=args.obtain_consecutive_data,
         wandb_logging=args.wandb_logging,
         save_traj_local=args.save_traj_local,
+        include_ee_orientation=args.include_ee_orientation,
         # model parameters
         learnable_likelihood_std=args.learnable_likelihood_std,
         include_aleatoric_noise=args.include_aleatoric_noise,
@@ -434,6 +455,7 @@ if __name__ == "__main__":
     parser.add_argument("--obtain_consecutive_data", type=int, default=0)
     parser.add_argument("--wandb_logging", type=bool, default=True)
     parser.add_argument("--save_traj_local", type=bool, default=True)
+    parser.add_argument("--include_ee_orientation", type=bool, default=True)
 
     # model parameters
     parser.add_argument("--learnable_likelihood_std", type=str, default="yes")

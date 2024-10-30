@@ -195,232 +195,53 @@ def plot_rc_trajectory(
 
 def plot_spot_trajectory(
     traj: Union[jnp.array, Transition],
-    actions: Optional[jnp.array] = None,
-    pos_domain_size: float = 5,
-    encode_angle: bool = False,
-    plot_mode: str = "simple",
-    goal: Optional[jnp.array] = None,
-    state_dim: int = 12,
-    goal_dim: int = 3,
-    action_dim: int = 6,
+    plot_mode: str,
     num_frame_stack: int = 0,
+    include_ee_orientation: bool = True,
 ):
     """Plots the trajectory of the spot robot"""
 
-    # TODO: Fix this according to state dimensions
+    # convert transitions to trajectory
+    observations = traj.observation
+    actions = traj.action
+    rewards = traj.reward
+    next_observations = traj.next_observation
+    print("Plotting observations with shape", observations.shape)
+    assert observations.shape[-1] == 15 or observations.shape[-1] == 16 or observations.shape[-1] == 24 or observations.shape[-1] == 28
 
-    assert (state_dim == 12 and not encode_angle) or (
-        state_dim == 13 and encode_angle
-    ), f"Invalid state dim {state_dim} and encode angle {encode_angle} combination"
+    # decode angles
+    if observations.shape[-1] == 16 and not include_ee_orientation:
+        observations = decode_angles(observations, 2)
+        next_observations = decode_angles(next_observations, 2)
+    elif observations.shape[-1] == 28 and include_ee_orientation:
+        # need to decode 2, 12, 13, 14
+        observations = decode_angles(observations, 2)
+        next_observations = decode_angles(next_observations, 2)
+        observations = decode_angles(observations, 12)
+        next_observations = decode_angles(next_observations, 12)
+        observations = decode_angles(observations, 13)
+        next_observations = decode_angles(next_observations, 13)
+        observations = decode_angles(observations, 14)
+        next_observations = decode_angles(next_observations, 14)
+    
+    # define idxs
+    goal_dim = 3 if not include_ee_orientation else 6
+    action_dim = 6 if not include_ee_orientation else 9
+    state_dim = 12 if not include_ee_orientation else 18
 
-    if plot_mode == "extended":
-        print(
-            "Plotting spot trajectory in extended mode with trajectory shape",
-            traj.shape,
-        )
 
-        # get state only
-        traj = traj[:, :state_dim]
-
-        scale_factor = 1.5
-        n_rows = state_dim
-        n_rows_extra = 2 if goal is not None else 1
-        n_cols = 2 if actions is not None else 1
-
-        if not encode_angle:
-            traj = decode_angles(traj, 2)
-            state_labels = [
-                "base_x",
-                "base_y",
-                "base_theta",
-                "base_vx",
-                "base_vy",
-                "base_vtheta",
-                "ee_x",
-                "ee_y",
-                "ee_z",
-                "ee_vx",
-                "ee_vy",
-                "ee_vz",
-            ]
-        else:
-            state_labels = [
-                "base_x",
-                "base_y",
-                "base_theta_sin",
-                "base_theta_cos",
-                "base_vx",
-                "base_vy",
-                "base_vtheta",
-                "ee_x",
-                "ee_y",
-                "ee_z",
-                "ee_vx",
-                "ee_vy",
-                "ee_vz",
-            ]
-
-        fig, axes = plt.subplots(
-            nrows=n_rows + n_rows_extra,
-            ncols=n_cols,
-            figsize=(scale_factor * 8, scale_factor * 10),
-        )
-
-        action_labels = [
-            "base_vx_action",
-            "base_vy_action",
-            "base_vtheta_action",
-            "ee_vx_action",
-            "ee_vy_action",
-            "ee_vz_action",
-        ]
-
-        traj_min = jnp.min(traj)
-        traj_max = jnp.max(traj)
-        common_y_range = (traj_min, traj_max)
-
-        for i in range(n_rows):
-            axes[i][0].plot(traj[:, i])
-            axes[i][0].set_ylabel(state_labels[i])
-            axes[i][0].set_title(state_labels[i])
-            axes[i][0].set_ylim(common_y_range)
-
-        if actions is not None:
-            action_min = jnp.min(actions)
-            action_max = jnp.max(actions)
-            action_y_range = (action_min, action_max)
-            idx_shift = 1 if n_rows == 12 else 2
-
-            axes[3][1].plot(actions[:, 0])
-            axes[3][1].set_ylabel(action_labels[0])
-            axes[3][1].set_title(action_labels[0])
-            axes[3][1].set_ylim(action_y_range)
-
-            axes[4][1].plot(actions[:, 1])
-            axes[4][1].set_ylabel(action_labels[1])
-            axes[4][1].set_title(action_labels[1])
-            axes[4][1].set_ylim(action_y_range)
-
-            axes[5][1].plot(actions[:, 2])
-            axes[5][1].set_ylabel(action_labels[2])
-            axes[5][1].set_title(action_labels[2])
-            axes[5][1].set_ylim(action_y_range)
-
-            axes[9 + idx_shift][1].plot(actions[:, 3])
-            axes[9 + idx_shift][1].set_ylabel(action_labels[3])
-            axes[9 + idx_shift][1].set_title(action_labels[3])
-            axes[9 + idx_shift][1].set_ylim(action_y_range)
-
-            axes[10 + idx_shift][1].plot(actions[:, 4])
-            axes[10 + idx_shift][1].set_ylabel(action_labels[4])
-            axes[10 + idx_shift][1].set_title(action_labels[4])
-            axes[10 + idx_shift][1].set_ylim(action_y_range)
-
-            axes[11 + idx_shift][1].plot(actions[:, 5])
-            axes[11 + idx_shift][1].set_xlabel("time")
-            axes[11 + idx_shift][1].set_ylabel(action_labels[5])
-            axes[11 + idx_shift][1].set_title(action_labels[5])
-            axes[11 + idx_shift][1].set_ylim(action_y_range)
-
-            # hide unused action subplots
-            axes[0][1].axis("off")
-            axes[1][1].axis("off")
-            axes[2][1].axis("off")
-
-            axes[6][1].axis("off")
-            axes[7][1].axis("off")
-            axes[8][1].axis("off")
-
-        # plot distance between base and ee
-        base_pos_pre = traj[:, :2]
-        base_pos = jnp.concatenate(
-            [base_pos_pre, 0.445 * jnp.ones_like(traj[:, :1])], axis=-1
-        )
-        ee_pos = traj[:, 7:10] if encode_angle else traj[:, 6:9]
-        pos_dist = jnp.linalg.norm(base_pos - ee_pos, axis=-1)
-        axes[-n_rows_extra][0].plot(pos_dist)
-        axes[-n_rows_extra][0].set_ylabel("base_ee_dist")
-
-        if goal is not None:
-            assert goal.shape == (3,), f"Invalid goal shape {goal.shape}"
-            axes[-1][0].plot(jnp.linalg.norm(ee_pos - goal, axis=-1))
-            axes[-1][0].set_ylabel("base_goal_dist")
-
-        axes[-1][0].set_xlabel("time")
-
-        return fig, axes
-
-    elif plot_mode == "simple":
-        print(
-            "Plotting spot trajectory in simple mode with trajectory shape", traj.shape
-        )
-
-        # get state only
-        traj = traj[:, :state_dim]
-
-        if encode_angle:
-            traj = decode_angles(traj, 2)
-
-        assert traj.shape[-1] == 12, f"Expected 12 states, got {traj.shape[-1]} states"
-
-        state_label_dict = {
-            0: "base_x",
-            1: "base_y",
-            2: "base_theta",
-            6: "ee_x",
-            7: "ee_y",
-            8: "ee_z",
-        }
-
-        scale_factor = 1.5
-        n_rows = len(state_label_dict)
-        n_rows_extra = 1 if goal is not None else 0
-        n_cols = 1
-
-        fig, axes = plt.subplots(
-            nrows=n_rows + n_rows_extra,
-            ncols=n_cols,
-            figsize=(scale_factor * 8, scale_factor * 10),
-        )
-        fig.tight_layout(pad=2.0)
-
-        for i, key in zip(range(n_rows), state_label_dict.keys()):
-            if key == 2:
-                theta_unwrapped = np.unwrap(traj[:, key].astype(np.float64))
-                axes[i].plot(theta_unwrapped)
-            else:
-                axes[i].plot(traj[:, key])
-            axes[i].set_ylabel(state_label_dict[key])
-            axes[i].set_title(state_label_dict[key])
-
-        if goal is not None:
-            assert goal.shape == (3,), f"Invalid goal shape {goal.shape}"
-            ee_pos = traj[:, 6:9]
-            axes[-1].plot(jnp.linalg.norm(ee_pos - goal, axis=-1))
-            axes[-1].set_ylabel("base_goal_dist")
-
-        axes[-1].set_xlabel("time")
-
-        return fig, axes
-    elif plot_mode == "transitions_eval_full":
+    if plot_mode == "transitions_eval_full":
         print("Plotting spot trajectory in transitions_eval_full mode")
 
-        # convert transitions to trajectory
-        observations = traj.observation
-        actions = traj.action
-        rewards = traj.reward
-        next_observations = traj.next_observation
-
-        # decode angles
-        if observations.shape[-1] == 16:
-            observations = decode_angles(observations, 2)
-            next_observations = decode_angles(next_observations, 2)
-
         def plot_goal_and_traj(traj_curr, actions_curr):
-            fig, axs = plt.subplots(1, 5, figsize=(24, 6))
-            ax1, ax2, ax3, ax4, ax5 = axs
+            if not include_ee_orientation:
+                fig, axs = plt.subplots(1, 5, figsize=(24, 6))
+                ax1, ax2, ax3, ax4, ax5 = axs
+            else:
+                fig, axs = plt.subplots(1, 6, figsize=(24, 6))
+                ax1, ax2, ax3, ax4, ax5, ax6 = axs
 
-            # 1. 2D View
+            # 2D View
             for idx, data in enumerate(traj_curr):
                 u = np.cos(data[:, 3])
                 v = np.sin(data[:, 3])
@@ -439,7 +260,7 @@ def plot_spot_trajectory(
                     label="Heading" if idx == 0 else None,
                 )
                 ax1.plot(
-                    data[:, -3], data[:, -2], "ro", label="Goal" if idx == 0 else None
+                    data[:, state_dim], data[:, state_dim + 1], "ro", label="Goal" if idx == 0 else None
                 )
                 ax1.plot(
                     data[0, 0],
@@ -467,10 +288,10 @@ def plot_spot_trajectory(
             ax1.set_xlim(-2.5, 2.5)
             ax1.set_ylim(-4.5, 4.5)
 
-            # 2. Z Component Analysis
+            # Z Component Analysis
             for idx, data in enumerate(traj_curr):
                 ee_z = data[:, 8]
-                goal_z = data[0, -1]
+                goal_z = data[0, state_dim + 2]
                 time_steps = np.arange(data.shape[0])
                 ax2.plot(time_steps, ee_z, label=f"EE Z" if idx == 0 else None)
                 ax2.hlines(
@@ -491,10 +312,10 @@ def plot_spot_trajectory(
             ax2.legend()
             ax2.grid(True)
 
-            # 3. EE-Goal Distance
+            # EE-Pos-Goal Distance
             for idx, data in enumerate(traj_curr):
                 ee_pos = data[:, 6:9]
-                goal_pos = data[:, -3:]
+                goal_pos = data[:, state_dim:state_dim + 3]
                 distance = np.linalg.norm(ee_pos - goal_pos, axis=1)
                 time_steps = np.arange(data.shape[0])
                 ax3.plot(
@@ -509,7 +330,28 @@ def plot_spot_trajectory(
             ax3.legend()
             ax3.grid(True)
 
-            # 4. EE-Base Distance
+            # EE-Orient-Goal Distance
+            if include_ee_orientation:
+                for idx, data in enumerate(traj_curr):
+                    ee_orient = data[:, 12:15]
+                    goal_orient = data[:, state_dim + 3: state_dim + 6]
+                    # cast both to [-pi, pi]
+                    ee_orient = (ee_orient + np.pi) % (2 * np.pi) - np.pi
+                    goal_orient = (goal_orient + np.pi) % (2 * np.pi) - np.pi
+                    distance = np.linalg.norm(ee_orient - goal_orient, axis=1)
+                    time_steps = np.arange(data.shape[0])
+                    ax4.plot(
+                        time_steps,
+                        distance,
+                        label=f"EE-Orient-Goal Distance" if idx == 0 else None,
+                    )
+                ax4.set_title("EE-Orient-Goal Distance")
+                ax4.set_xlabel("Time Step")
+                ax4.set_ylabel("Distance [rad]")
+                ax4.legend()
+                ax4.grid(True)
+
+            # EE-Base Distance
             for idx, data in enumerate(traj_curr):
                 ee_pos = data[:, 6:9]
                 base_pos = data[:, 0:3]
@@ -526,7 +368,7 @@ def plot_spot_trajectory(
             ax4.legend()
             ax4.grid(True)
 
-            # 5. Actions
+            # Actions
             for idx, data in enumerate(actions_curr):
                 time_steps = np.arange(data.shape[0])
                 ax5.plot(time_steps, data[:, 0], label="Base Vx" if idx == 0 else None)
@@ -537,6 +379,10 @@ def plot_spot_trajectory(
                 ax5.plot(time_steps, data[:, 3], label="EE Vx" if idx == 0 else None)
                 ax5.plot(time_steps, data[:, 4], label="EE Vy" if idx == 0 else None)
                 ax5.plot(time_steps, data[:, 5], label="EE Vz" if idx == 0 else None)
+                if include_ee_orientation:
+                    ax5.plot(time_steps, data[:, 6], label="EE Roll" if idx == 0 else None)
+                    ax5.plot(time_steps, data[:, 7], label="EE Pitch" if idx == 0 else None)
+                    ax5.plot(time_steps, data[:, 8], label="EE Yaw" if idx == 0 else None)
             ax5.set_title("Actions")
             ax5.set_xlabel("Time Step")
             ax5.set_ylabel("Action [m/s or rad/s]")
@@ -549,45 +395,51 @@ def plot_spot_trajectory(
     elif plot_mode == "transitions_distance_eval":
         print("Plotting spot trajectory in transitions_distance_eval mode")
 
-        # convert transitions to trajectory
-        observations = traj.observation
-        actions = traj.action
-        rewards = traj.reward
-        next_observations = traj.next_observation
-
-        # decode angles
-        if observations.shape[-1] == 16:
-            observations = decode_angles(observations, 2)
-            next_observations = decode_angles(next_observations, 2)
-
         def plot_ee_goal_error(trajs):
             # calculate error between EE and Goal
-            ee_goal_error = []
+            ee_pos_goal_error = []
             for traj in trajs:
                 ee_pos = traj[:, 6:9]
-                goal_pos = traj[:, -3:]
+                goal_pos = traj[:, state_dim:state_dim + 3]
                 error = np.linalg.norm(ee_pos - goal_pos, axis=1)
-                ee_goal_error.append(error)
-            ee_goal_error = np.array(ee_goal_error)
+                ee_pos_goal_error.append(error)
+            ee_pos_goal_error = np.array(ee_pos_goal_error)
+
+            if include_ee_orientation:
+                ee_orient_goal_error = []
+                for traj in trajs:
+                    ee_orient = traj[:, 12:15]
+                    goal_orient = traj[:, state_dim + 3: state_dim + 6]
+                    # cast both to [-pi, pi]
+                    ee_orient = (ee_orient + np.pi) % (2 * np.pi) - np.pi
+                    goal_orient = (goal_orient + np.pi) % (2 * np.pi) - np.pi
+                    error = np.linalg.norm(ee_orient - goal_orient, axis=1)
+                    ee_orient_goal_error.append(error)
+                ee_orient_goal_error = np.array(ee_orient_goal_error)
+
 
             # plot errors
-            fig, ax = plt.subplots(2, 1, figsize=(12, 6))
-            fig.subplots_adjust(hspace=0.5)
+            if not include_ee_orientation:
+                fig, ax = plt.subplots(2, 1, figsize=(12, 6))
+                fig.subplots_adjust(hspace=0.5)
+            else:
+                fig, ax = plt.subplots(4, 1, figsize=(12, 12))
+                fig.subplots_adjust(hspace=0.5)
 
-            # plot all errors
-            for idx, error in enumerate(ee_goal_error):
+            # plot all pos errors
+            for idx, error in enumerate(ee_pos_goal_error):
                 time_steps = np.arange(error.shape[0])
                 ax[0].plot(time_steps, error)
             ax[0].axvline(10, color="r", linestyle="--", label="1s - 10 Steps")
-            ax[0].set_title("EE-Goal Error")
+            ax[0].set_title("EE-Goal Position Error")
             ax[0].set_xlabel("Time Step")
             ax[0].set_ylabel("Error [m]")
             ax[0].legend()
             ax[0].grid(True)
 
-            # plot mean error and std
-            mean_error = np.mean(ee_goal_error, axis=0)
-            std_error = np.std(ee_goal_error, axis=0)
+            # plot mean error and std of pos errors
+            mean_error = np.mean(ee_pos_goal_error, axis=0)
+            std_error = np.std(ee_pos_goal_error, axis=0)
             time_steps = np.arange(mean_error.shape[0])
             ax[1].plot(time_steps, mean_error, label="Mean Error")
             ax[1].fill_between(
@@ -598,22 +450,65 @@ def plot_spot_trajectory(
                 label="Std Error",
             )
             ax[1].axvline(10, color="r", linestyle="--", label="1s - 10 Steps")
-            ax[1].set_title("Mean and Std EE-Goal Error")
+            ax[1].set_title("Mean and Std EE-Goal Position Error")
             ax[1].set_xlabel("Time Step")
             ax[1].set_ylabel("Error [m]")
             ax[1].legend()
             ax[1].grid(True)
 
             # plot max and min error
-            max_error = np.max(ee_goal_error, axis=0)
-            min_error = np.min(ee_goal_error, axis=0)
+            max_error = np.max(ee_pos_goal_error, axis=0)
+            min_error = np.min(ee_pos_goal_error, axis=0)
             ax[1].plot(time_steps, max_error, linestyle="--", label="Max Error")
             ax[1].plot(time_steps, min_error, linestyle="--", label="Min Error")
             ax[1].legend()
 
-            # get mean error after 10 steps
-            mean_error_after_10_steps = np.mean(mean_error[10:])
+            # get mean pos error after 10 steps
+            mean_pos_error_after_10_steps = np.mean(mean_error[10:])
 
+            if include_ee_orientation:
+                # plot all orient errors
+                for idx, error in enumerate(ee_orient_goal_error):
+                    time_steps = np.arange(error.shape[0])
+                    ax[2].plot(time_steps, error)
+                ax[2].axvline(10, color="r", linestyle="--", label="1s - 10 Steps")
+                ax[2].set_title("EE-Goal Orientation Error")
+                ax[2].set_xlabel("Time Step")
+                ax[2].set_ylabel("Error [rad]")
+                ax[2].legend()
+                ax[2].grid(True)
+
+                # plot mean error and std of orient errors
+                mean_error = np.mean(ee_orient_goal_error, axis=0)
+                std_error = np.std(ee_orient_goal_error, axis=0)
+                time_steps = np.arange(mean_error.shape[0])
+                ax[3].plot(time_steps, mean_error, label="Mean Error")
+                ax[3].fill_between(
+                    time_steps,
+                    mean_error - std_error,
+                    mean_error + std_error,
+                    alpha=0.5,
+                    label="Std Error",
+                )
+                ax[3].axvline(10, color="r", linestyle="--", label="1s - 10 Steps")
+                ax[3].set_title("Mean and Std EE-Goal Orientation Error")
+                ax[3].set_xlabel("Time Step")
+                ax[3].set_ylabel("Error [rad]")
+                ax[3].legend()
+                ax[3].grid(True)
+
+                # plot max and min error
+                max_error = np.max(ee_orient_goal_error, axis=0)
+                min_error = np.min(ee_orient_goal_error, axis=0)
+                ax[3].plot(time_steps, max_error, linestyle="--", label="Max Error")
+                ax[3].plot(time_steps, min_error, linestyle="--", label="Min Error")
+                ax[3].legend()
+
+                # get mean orient error after 10 steps
+                mean_orient_error_after_10_steps = np.mean(mean_error[10:])
+
+
+            mean_error_after_10_steps = (mean_pos_error_after_10_steps, mean_orient_error_after_10_steps) if include_ee_orientation else mean_pos_error_after_10_steps
             return fig, ax, mean_error_after_10_steps
 
         return plot_ee_goal_error(observations)
@@ -626,7 +521,7 @@ def sample_pos_and_goal_spot(
     rng_key: jax.random.PRNGKey,
     domain_lower: jnp.array,
     domain_upper: jnp.array,
-    include_ee_orientation: bool = False,
+    include_ee_orientation: bool = True,
     goal_dim: int = 3,
     state_dim: int = 12,
     goal_dim_with_ee_orientation: int = 6,
@@ -846,7 +741,7 @@ def sample_pos_and_goal_spot(
         if include_ee_orientation:
             # sample goal ee orientation
             ee_orientation_goal = standard_init_goal[3:] + jax.random.uniform(
-                key_ee_orientation_goal, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+                key_ee_orientation_goal, shape=(3,), minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]), maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi])
             )
             init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z]), ee_orientation_goal])
         else:
@@ -860,7 +755,7 @@ def sample_pos_and_goal_spot(
         )
         if include_ee_orientation:
             init_goal_ee = standard_init_goal[3:] + jax.random.uniform(
-                key_goal, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+                key_goal, shape=(3,), minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]), maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi])
             )
             init_goal_ee = jnp.minimum(
                 jnp.maximum(init_goal_ee, domain_lower[12:15]), domain_upper[12:15]

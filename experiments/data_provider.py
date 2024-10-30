@@ -10,9 +10,10 @@ from brax.training.types import Transition
 
 from experiments.util import load_csv_recordings
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
-from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
+from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
 from sim_transfer.sims.simulators import StackedActionSimWrapper
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
+from sim_transfer.sims.util import decode_angles as decode_angles_fn
 
 
 DATA_DIR = os.path.join(
@@ -54,7 +55,7 @@ DEFAULTS_RACECAR = {
 DEFAULTS_RACECAR_REAL = {"sampling": "consecutive", "num_samples_test": 10000}
 
 DEFAULTS_SPOT = {
-    "obs_noise_std": SPOT_DEFAULT_OBSERVATION_NOISE_STD,
+    "obs_noise_std": SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
     "x_support_mode_train": "full",
     "param_mode": "random",
 }
@@ -70,12 +71,28 @@ _RACECAR_NOISE_STD_ENCODED = 20 * jnp.concatenate(
     ]
 )
 
+# _SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate(
+#     [
+#         DEFAULTS_SPOT["obs_noise_std"][:2],
+#         DEFAULTS_SPOT["obs_noise_std"][2:3],
+#         DEFAULTS_SPOT["obs_noise_std"][2:3],
+#         DEFAULTS_SPOT["obs_noise_std"][3:],
+#     ]
+# )
+
 _SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate(
     [
         DEFAULTS_SPOT["obs_noise_std"][:2],
         DEFAULTS_SPOT["obs_noise_std"][2:3],
         DEFAULTS_SPOT["obs_noise_std"][2:3],
-        DEFAULTS_SPOT["obs_noise_std"][3:],
+        DEFAULTS_SPOT["obs_noise_std"][3:12],
+        DEFAULTS_SPOT["obs_noise_std"][12:13],
+        DEFAULTS_SPOT["obs_noise_std"][12:13],
+        DEFAULTS_SPOT["obs_noise_std"][13:14],
+        DEFAULTS_SPOT["obs_noise_std"][13:14],
+        DEFAULTS_SPOT["obs_noise_std"][14:15],
+        DEFAULTS_SPOT["obs_noise_std"][14:15],
+        DEFAULTS_SPOT["obs_noise_std"][15:],
     ]
 )
 
@@ -393,13 +410,13 @@ def delay_and_stack_spot_actions(
         u_stacked = u_padded[indices].reshape(u.shape[0], -1)
         assert u_stacked.shape == (
             u.shape[0],
-            6 * (num_stacked_actions + 1),
-        ), f"Something went wrong with the action stacking, expected shape {u.shape[0], 6 * (num_stacked_actions + 1)} but got {u_stacked.shape}"
+            (action_dim_base + action_dim_ee) * (num_stacked_actions + 1),
+        ), f"Something went wrong with the action stacking, expected shape {u.shape[0], (action_dim_base + action_dim_ee) * (num_stacked_actions + 1)} but got {u_stacked.shape}"
         u = u_stacked
 
     # only action delay
     elif action_delay_base > 0 or action_delay_ee > 0:
-        u_base, u_ee = u[:, :3], u[:, 3:]
+        u_base, u_ee = u[:, :action_dim_base], u[:, action_dim_base:]
         print(
             f"[data_provider] Using action delay with base action delay: {action_delay_base} and ee action delay: {action_delay_ee}",
         )
@@ -433,11 +450,43 @@ def _prepare_spot_datasets(
     action_delay_base: int = 0,
     action_delay_ee: int = 0,
     num_stacked_actions: int = 0,
-    angle_idx: int = 2,
+    angle_idx: Union[int, List[int]] = 2,
     add_goal: bool = False,
+    include_ee_orientation: bool = True,
 ):
     # unpack dataset
-    x, u, y = dataset_pre
+    x = jnp.array([d.observation for d in dataset_pre])
+    u = jnp.array([d.action for d in dataset_pre])
+    y = jnp.array([d.next_observation for d in dataset_pre])
+
+
+    # angles are already encoded in the dataset, let's decode them and cast into [-\pi, \pi] 
+    if include_ee_orientation:
+        indices_in_encoded = [angle_idx[0], angle_idx[1]+1, angle_idx[2]+2, angle_idx[3]+3]
+        x = decode_angles_fn(x, angle_idx=indices_in_encoded[0])
+        y = decode_angles_fn(y, angle_idx=indices_in_encoded[0])
+        x = decode_angles_fn(x, angle_idx=indices_in_encoded[1])
+        y = decode_angles_fn(y, angle_idx=indices_in_encoded[1])
+        x = decode_angles_fn(x, angle_idx=indices_in_encoded[2])
+        y = decode_angles_fn(y, angle_idx=indices_in_encoded[2])
+        x = decode_angles_fn(x, angle_idx=indices_in_encoded[3])
+        y = decode_angles_fn(y, angle_idx=indices_in_encoded[3])
+        x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+    else:
+        x = decode_angles_fn(x, angle_idx=angle_idx)
+        y = decode_angles_fn(y, angle_idx=angle_idx)
+        x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
+    # save raw y for goal addition
+    y_raw = y
 
     # action stacking and action delay
     # note: we can can't split action delay if we use action stacking
@@ -446,26 +495,60 @@ def _prepare_spot_datasets(
         num_stacked_actions=num_stacked_actions,
         action_delay_base=action_delay_base,
         action_delay_ee=action_delay_ee,
+        action_dim_ee=6 if include_ee_orientation else 3,
     )
 
-    # project theta into [-\pi, \pi] and encode angles
-    x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-    y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-    if encode_angles:
-        x = encode_angles_fn(x, angle_idx=angle_idx)
-        y = encode_angles_fn(y, angle_idx=angle_idx)
+    # project angles into [-\pi, \pi] and encode angles
+    if include_ee_orientation:
+        x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        if encode_angles:
+            indices_in_encoded = [angle_idx[0], angle_idx[1]+1, angle_idx[2]+2, angle_idx[3]+3]
+            x = encode_angles_fn(x, angle_idx=indices_in_encoded[0])
+            y = encode_angles_fn(y, angle_idx=indices_in_encoded[0])
+            x = encode_angles_fn(x, angle_idx=indices_in_encoded[1])
+            y = encode_angles_fn(y, angle_idx=indices_in_encoded[1])
+            x = encode_angles_fn(x, angle_idx=indices_in_encoded[2])
+            y = encode_angles_fn(y, angle_idx=indices_in_encoded[2])
+            x = encode_angles_fn(x, angle_idx=indices_in_encoded[3])
+            y = encode_angles_fn(y, angle_idx=indices_in_encoded[3])
+    else:
+        x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+        if encode_angles:
+            x = encode_angles_fn(x, angle_idx=angle_idx)
+            y = encode_angles_fn(y, angle_idx=angle_idx)
 
     # remove first n steps (since often not much is happening)
     x, u, y = x[skip_first_n:], u[skip_first_n:], y[skip_first_n:]
+    y_raw = y_raw[skip_first_n:]
 
     if add_goal:
         k = 10
-        goal_start_idx = 7 if encode_angles else 6
-        goal_end_idx = goal_start_idx + 3
+        
+        if include_ee_orientation:
+            pos_goal_start_idx = 7 if encode_angles else 6
+            pos_goal_end_idx = pos_goal_start_idx + 3
+            orient_goal_start_idx = 12
+            orient_goal_end_idx = orient_goal_start_idx + 3
+            pos_goal = y[k:, pos_goal_start_idx:pos_goal_end_idx]
+            orient_goal = y_raw[k:, orient_goal_start_idx:orient_goal_end_idx]
+            goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
+            last_pos_goal = y[-1, pos_goal_start_idx:pos_goal_end_idx]
+            last_orient_goal = y_raw[-1, orient_goal_start_idx:orient_goal_end_idx]
+            last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
+        else:
+            goal_start_idx = 7 if encode_angles else 6
+            goal_end_idx = goal_start_idx + 3
+            goal = y[k:, goal_start_idx:goal_end_idx]
+            last_goal = y[-1, goal_start_idx:goal_end_idx]
 
-        goal = y[k:, goal_start_idx:goal_end_idx]
-
-        last_goal = y[-1, goal_start_idx:goal_end_idx]
         padding = jnp.tile(last_goal, (k, 1))  # Repeat the last goal k times
         goal = jnp.concatenate([goal, padding], axis=0)
 
@@ -483,12 +566,9 @@ def _prepare_spot_datasets(
     y_data = y  # next state
 
     # check shapes
+    action_dim = 9 if include_ee_orientation else 6
     assert x_data.shape[0] == y_data.shape[0]
-    assert (
-        x_data.shape[1]
-        - 6 * (1 + num_stacked_actions)
-        == y_data.shape[1]
-    )
+    assert x_data.shape[1] - action_dim * (1 + num_stacked_actions) == y_data.shape[1]
 
     return x_data, y_data
 
@@ -500,17 +580,28 @@ def get_spot_recorded_data(
     action_delay_ee: int = 0,
     num_stacked_actions: int = 0,
     num_test_points: int = 1000,
-    angle_idx: int = 2,
+    angle_idx: Union[int, List[int]] = 2,
     shuffle: bool = True,
     add_goal: bool = False,
+    include_ee_orientation: bool = True,
 ):
-    recordings_dirs = [
-        os.path.join(DATA_DIR, "recordings_spot_v0"),
-        os.path.join(DATA_DIR, "recordings_spot_v1"),
-        os.path.join(DATA_DIR, "recordings_spot_v2"),
-        os.path.join(DATA_DIR, "recordings_spot_v3"),
-        os.path.join(DATA_DIR, "recordings_spot_v4"),
-    ]
+    if include_ee_orientation:
+        recordings_dirs = [
+            os.path.join(DATA_DIR, "recordings_spot_new_v0"),
+            os.path.join(DATA_DIR, "recordings_spot_new_v1"),
+            os.path.join(DATA_DIR, "recordings_spot_new_v2"),
+            os.path.join(DATA_DIR, "recordings_spot_new_v3"),
+            os.path.join(DATA_DIR, "recordings_spot_new_v4"),
+        ]
+        angle_idx = [2, 12, 13, 14]
+    else:
+        recordings_dirs = [
+            os.path.join(DATA_DIR, "recordings_spot_v0"),
+            os.path.join(DATA_DIR, "recordings_spot_v1"),
+            os.path.join(DATA_DIR, "recordings_spot_v2"),
+            os.path.join(DATA_DIR, "recordings_spot_v3"),
+            os.path.join(DATA_DIR, "recordings_spot_v4"),
+        ]
     files = sorted(
         [
             file
@@ -926,29 +1017,40 @@ def provide_data_and_sim(
             num_stacked_actions = data_spec.get("num_stacked_actions", 0)
             if num_stacked_actions > 0:
                 sim = StackedActionSimWrapper(
-                    SpotSim(encode_angle=True), num_stacked_actions=num_stacked_actions, action_size=6
+                    SpotSim(encode_angle=True),
+                    num_stacked_actions=num_stacked_actions,
+                    action_size=9,
                 )
             else:
                 sim = SpotSim(encode_angle=True)
-            print(f"[data_provider] Using real Spot data with {num_stacked_actions} stacked actions")
+            print(
+                f"[data_provider] Using real Spot data with {num_stacked_actions} stacked actions"
+            )
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
                 encode_angle=True,
                 num_stacked_actions=num_stacked_actions,
+                include_ee_orientation=True,
             )
         elif data_source == "spot_real_with_goal":
             num_stacked_actions = data_spec.get("num_stacked_actions", 0)
             if num_stacked_actions > 0:
                 sim = StackedActionSimWrapper(
-                    SpotSim(encode_angle=True), num_stacked_actions=num_stacked_actions, action_size=6
+                    SpotSim(encode_angle=True),
+                    num_stacked_actions=num_stacked_actions,
+                    action_size=9,
                 )
             else:
                 sim = SpotSim(encode_angle=True)
-            print(f"[data_provider] Using real Spot data with goal and {num_stacked_actions} stacked actions")
+            print(
+                f"[data_provider] Using real Spot data with goal and {num_stacked_actions} stacked actions"
+            )
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
                 encode_angle=True,
                 add_goal=True,
                 num_stacked_actions=num_stacked_actions,
+                include_ee_orientation=True,
             )
+        # TODO add option for no ee orientation
         else:
             raise ValueError(f"Unknown spot data source {data_source}")
 
@@ -1031,8 +1133,8 @@ if __name__ == "__main__":
 
     # test spot data
     x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real_actionstack",
-        data_spec={"num_samples_train": 400, "num_samples_test": 50},
+        data_source="spot_real",
+        data_spec={"num_samples_train": 5000, "num_samples_test": 50, "num_stacked_actions": 2}, 
     )
     print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
 

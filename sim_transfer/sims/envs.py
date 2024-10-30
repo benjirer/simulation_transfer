@@ -4,6 +4,7 @@ from typing import Dict, Any, Tuple, Optional
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.spatial.transform import Rotation as R
 
 from sim_transfer.sims.dynamics_models import (
     RaceCar,
@@ -305,7 +306,8 @@ class SpotEnvReward:
     _include_ee_orientation: bool = True
     if _include_ee_orientation:
         _angle_idx: list = [2, 12, 13, 14]
-    _angle_idx: int = 2
+    else:
+        _angle_idx: int = 2
     dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
 
     def __init__(
@@ -399,20 +401,27 @@ class SpotEnvReward:
                 goal = next_obs[..., 18 : 18 + self.dim_goal]
             else:
                 next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
-            goal = next_obs[..., 12 : 12 + self.dim_goal]
+                goal = next_obs[..., 12 : 12 + self.dim_goal]
         assert (
             goal.shape[-1] == self.dim_goal
         ), f"Goal shape {goal.shape} must be {self.dim_goal}"
-        ee_pos_diff = next_obs[..., 6:9] - goal
+        ee_pos_diff = next_obs[..., 6:9] - goal[0:3]
         ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-        reward_pos = self.tolerance_reward(ee_pos_dist)
         if self._include_ee_orientation:
-            ee_ang_diff = next_obs[..., 12:15] - goal[3:6]
-            ee_ang_dist = jnp.sqrt(jnp.sum(jnp.square(ee_ang_diff), axis=-1))
-            reward_ang = self.tolerance_reward(ee_ang_dist)
-            reward = reward_pos + reward_ang
+            observed_angles = next_obs[..., 12:15]
+            goal_angles = goal[3:6]
+            goal_angles = jnp.broadcast_to(goal_angles, observed_angles.shape)
+            observed_rotation = R.from_euler('xyz', observed_angles, degrees=False)
+            goal_rotation = R.from_euler('xyz', goal_angles, degrees=False)
+            relative_rotation = goal_rotation * observed_rotation.inv()
+            rotation_dist = relative_rotation.magnitude()
+            rotation_dist_scaled = 2 * (rotation_dist / jnp.pi)
+            rotation_dist_scaled = jnp.clip(rotation_dist_scaled, 0.0, 2.0)
+            total_dist = ee_pos_dist + rotation_dist_scaled
         else:
-            reward = reward_pos
+            total_dist = ee_pos_dist
+        
+        reward = self.tolerance_reward(total_dist)
         return reward
     
     def action_difference_cost(self, next_obs: jnp.array, action: jnp.array) -> jnp.array:
@@ -438,7 +447,13 @@ class SpotEnvReward:
     def ee_body_reward(self, next_obs: jnp.array) -> jnp.array:
         """Computes the reward for ee-base distance staying within constraint"""
         if self.encode_angle:
-            next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+            if self._include_ee_orientation:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
+            else:
+                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
         base_pos = next_obs[..., :2]
         base_pos = jnp.concatenate([base_pos, jnp.array([0.445])], axis=-1)
         ee_pos = next_obs[..., 6:9]
@@ -451,7 +466,7 @@ class SpotEnvReward:
 
 class SpotSimEnv:
     max_steps: int = 200
-    _dt: float = 1 / 10.0
+    _dt: float = 1 / 15.0
     _include_ee_orientation: bool = True
     dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
     if _include_ee_orientation:
@@ -471,8 +486,10 @@ class SpotSimEnv:
         spot_obs_noise_stds: jnp.array = None,
         action_delay: float = 0.0,
         margin_factor: float = 10.0,
-        max_velocity_base: float = 1.0,
-        max_velocity_ee: float = 1.0,
+        max_velocity_base: float = 1.6,
+        max_ang_velocity_base: float = 1.5,
+        max_velocity_ee: float = 5.0,
+        max_ang_velocity_ee: float = 2.5,
         seed: int = 230492394,
         max_steps: int = 200,
     ):
@@ -502,9 +519,10 @@ class SpotSimEnv:
         self._rds_key = jax.random.PRNGKey(seed)
         self.max_steps = max_steps
 
-        # for safety
-        self.max_velocity_base = jnp.clip(max_velocity_base, 0.0, 1.0)
-        self.max_velocity_ee = jnp.clip(max_velocity_ee, 0.0, 1.0)
+        self.max_velocity_base = max_velocity_base
+        self.max_velocity_ee = max_velocity_ee
+        self.max_ang_velocity_ee = max_ang_velocity_ee
+        self.max_ang_velocity_base = max_ang_velocity_base
 
         # initialize dynamics and observation noise models
         self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=False, include_ee_orientation=self._include_ee_orientation)
@@ -590,14 +608,14 @@ class SpotSimEnv:
         action = jnp.clip(action, -1.0, 1.0)
         action = action.at[0].set(self.max_velocity_base * action[0])
         action = action.at[1].set(self.max_velocity_base * action[1])
-        action = action.at[2].set(self.max_velocity_base * action[2])
+        action = action.at[2].set(self.max_ang_velocity_base * action[2])
         action = action.at[3].set(self.max_velocity_ee * action[3])
         action = action.at[4].set(self.max_velocity_ee * action[4])
         action = action.at[5].set(self.max_velocity_ee * action[5])
         if self._include_ee_orientation:
-            action = action.at[6].set(self.max_velocity_ee * action[6])
-            action = action.at[7].set(self.max_velocity_ee * action[7])
-            action = action.at[8].set(self.max_velocity_ee * action[8])
+            action = action.at[6].set(self.max_ang_velocity_ee * action[6])
+            action = action.at[7].set(self.max_ang_velocity_ee * action[7])
+            action = action.at[8].set(self.max_ang_velocity_ee * action[8])
         rng_key = self.rds_key if rng_key is None else rng_key
 
         # handle action delay
@@ -782,4 +800,4 @@ if __name__ == "__main__":
     actions = jnp.stack(actions)
 
     # plot trajectory
-    plot_spot_trajectory(traj, actions, encode_angle=ENCODE_ANGLE)
+    plot_spot_trajectory(traj, actions)

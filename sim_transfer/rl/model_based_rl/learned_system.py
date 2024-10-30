@@ -140,8 +140,10 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         predict_difference: bool = True,
         num_frame_stack: int = 0,
         dim_goal: int = 3,
+        include_ee_orientation: bool = True,
     ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
+        self.include_ee_orientation = include_ee_orientation
         self.model = model
         self.include_noise = include_noise
         self.predict_difference = predict_difference
@@ -150,6 +152,13 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         self._u_dim = u_dim
         self._dim_goal = dim_goal
         self._x_dim_no_goal = self._x_dim - self._dim_goal
+
+        assert (
+            self._dim_goal == 3
+            and not self.include_ee_orientation
+            or self._dim_goal == 6
+            and self.include_ee_orientation
+        ), "dim_goal must be 3 if not include_ee_orientation and 6 if include_ee_orientation"
 
     def next_state(
         self, x_raw: chex.Array, u: chex.Array, dynamics_params: DynamicsParams
@@ -168,11 +177,13 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
 
         # remove goal from state
         print("x_raw shape", x_raw.shape)
-        x_raw_unaugmented = x_raw[: self._x_dim] # dim = 16
-        frame_stack = x_raw[self._x_dim : self._x_dim + self._u_dim * self.num_frame_stack] # dim = 12
-        goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim] # dim = 3
-        x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal] # dim = 13
-        x = jnp.concatenate([x_unaugmented_no_goal, frame_stack]) # dim = 13 + 12 = 25
+        x_raw_unaugmented = x_raw[: self._x_dim]
+        frame_stack = x_raw[
+            self._x_dim : self._x_dim + self._u_dim * self.num_frame_stack
+        ]
+        goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim]
+        x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal]
+        x = jnp.concatenate([x_unaugmented_no_goal, frame_stack])
         print("x shape", x.shape)
         assert x.shape == (
             self._x_dim_no_goal + self._u_dim * self.num_frame_stack,
@@ -182,7 +193,7 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         assert goal.shape == (self._dim_goal,)
 
         # create state-action pair
-        z = jnp.concatenate([x, u]) # dim = 25 + 3 = 28
+        z = jnp.concatenate([x, u])
         z = z.reshape((1, -1))
 
         # predict next state
@@ -198,13 +209,13 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
             _x_next = _x_next.reshape((self._x_dim_no_goal,))
 
         # add goal back to state
-        _x_next = jnp.concatenate([_x_next, goal]) # dim = 16
+        _x_next = jnp.concatenate([_x_next, goal])
 
         if self.num_frame_stack > 0:
             # update last num_frame_stack actions
-            _us = x_raw[self._x_dim :] # dim = 12
-            new_us = jnp.concatenate([_us[self._u_dim :], u]) # dim = 12
-            x_next = jnp.concatenate([_x_next, new_us]) # dim = 16 + 12 = 28
+            _us = x_raw[self._x_dim :]
+            new_us = jnp.concatenate([_us[self._u_dim :], u])
+            x_next = jnp.concatenate([_x_next, new_us])
         else:
             x_next = _x_next
 
@@ -222,11 +233,12 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
         include_noise: bool,
         predict_difference: bool,
         num_frame_stack: int = 0,
-        dim_goal: int = 3,
+        include_ee_orientation: bool = True,
         **spot_reward_kwargs: dict
     ):
+        dim_goal = 3 if not include_ee_orientation else 6
         reward = SpotReward(
-            **spot_reward_kwargs, num_frame_stack=num_frame_stack, dim_goal=dim_goal
+            **spot_reward_kwargs, num_frame_stack=num_frame_stack, dim_goal=dim_goal, include_ee_orientation=include_ee_orientation
         )
         dynamics = LearnedSpotDynamics(
             x_dim=reward.x_dim + num_frame_stack * reward.u_dim,
@@ -236,6 +248,7 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
             include_noise=include_noise,
             predict_difference=predict_difference,
             num_frame_stack=num_frame_stack,
+            include_ee_orientation=include_ee_orientation,
         )
         System.__init__(self, dynamics=dynamics, reward=reward)
         self.num_frame_stack = num_frame_stack

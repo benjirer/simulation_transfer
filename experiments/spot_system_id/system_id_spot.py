@@ -458,7 +458,7 @@ def run_spot_system_id(
         )
 
         fig, axes = plt.subplots(nrows=6, ncols=2)
-        t = np.arange(sim_traj.shape[0]) / 10.0
+        t = np.arange(sim_traj.shape[0]) / 15.0
         labels = [
             "base_pos_x",
             "base_pos_y",
@@ -589,7 +589,7 @@ def run_spot_system_id(
     )
 
     # initialize dynamics model
-    dynamics = SpotDynamicsModel(dt=1.0 / 10.0, encode_angle=encode_angle)
+    dynamics = SpotDynamicsModel(dt=1.0 / 15.0, encode_angle=encode_angle)
     step_vmap = jax.vmap(dynamics.next_step, in_axes=(0, 0, None), out_axes=0)
 
     # initialize parameters

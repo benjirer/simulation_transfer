@@ -2004,7 +2004,7 @@ class StackedActionSimWrapper(FunctionSimulator):
 
 
 class SpotSim(FunctionSimulator):
-    _dt: float = 1 / 10.0
+    _dt: float = 1 / 15.0
     _include_ee_orientation: bool = True
     if _include_ee_orientation:
         _angle_idx: list = [2, 12, 13, 14]
@@ -2019,25 +2019,25 @@ class SpotSim(FunctionSimulator):
             -2.5,
             -jnp.pi,
             # base vel
-            -1.0,
-            -1.0,
-            -1.0,
+            -1.6,
+            -1.6,
+            -1.5,
             # ee pos
             -2.5,
             -2.5,
             0.1,
             # ee vel
-            -1.0,
-            -1.0,
-            -1.0,
+            -5.0,
+            -5.0,
+            -5.0,
             # base action
-            -1.0,
-            -1.0,
-            -1.0,
+            -1.6,
+            -1.6,
+            -1.5,
             # ee action
-            -1.0,
-            -1.0,
-            -1.0,
+            -5.0,
+            -5.0,
+            -5.0,
         ]
     )
     _domain_upper_no_ee = jnp.array(
@@ -2047,25 +2047,25 @@ class SpotSim(FunctionSimulator):
             2.5,
             jnp.pi,
             # base vel
-            1.0,
-            1.0,
-            1.0,
+            1.6,
+            1.6,
+            1.5,
             # ee pos
             4.5,
             2.5,
             1.8,
             # ee vel
-            1.0,
-            1.0,
-            1.0,
+            5.0,
+            5.0,
+            5.0,
             # base action
-            1.0,
-            1.0,
-            1.0,
+            1.6,
+            1.6,
+            1.5,
             # ee action
-            1.0,
-            1.0,
-            1.0,
+            5.0,
+            5.0,
+            5.0,
         ]
     )
 
@@ -2076,37 +2076,37 @@ class SpotSim(FunctionSimulator):
             -2.5,
             -jnp.pi,
             # base vel
-            -1.0,
-            -1.0,
-            -1.0,
+            -1.6,
+            -1.6,
+            -1.5,
             # ee pos
             -2.5,
             -2.5,
             0.1,
             # ee vel
-            -1.0,
-            -1.0,
-            -1.0,
+            -5.0,
+            -5.0,
+            -5.0,
             # ee orientation
             -jnp.pi,
             -jnp.pi,
             -jnp.pi,
             # ee angular vel
-            -1.0,
-            -1.0,
-            -1.0,
+            -2.5,
+            -2.5,
+            -2.5,
             # base action
-            -1.0,
-            -1.0,
-            -1.0,
+            -1.6,
+            -1.6,
+            -1.5,
             # ee action
-            -1.0,
-            -1.0,
-            -1.0,
+            -5.0,
+            -5.0,
+            -5.0,
             # ee angular action
-            -1.0,
-            -1.0,
-            -1.0,
+            -2.5,
+            -2.5,
+            -2.5,
         ]
     )
 
@@ -2117,37 +2117,37 @@ class SpotSim(FunctionSimulator):
             2.5,
             jnp.pi,
             # base vel
-            1.0,
-            1.0,
-            1.0,
+            1.6,
+            1.6,
+            1.5,
             # ee pos
             4.5,
             2.5,
             1.8,
             # ee vel
-            1.0,
-            1.0,
-            1.0,
+            5.0,
+            5.0,
+            5.0,
             # ee orientation
             jnp.pi,
             jnp.pi,
             jnp.pi,
             # ee angular vel
-            1.0,
-            1.0,
-            1.0,
+            2.5,
+            2.5,
+            2.5,
             # base action
-            1.0,
-            1.0,
-            1.0,
+            1.6,
+            1.6,
+            1.5,
             # ee action
-            1.0,
-            1.0,
-            1.0,
+            5.0,
+            5.0,
+            5.0,
             # ee angular action
-            1.0,
-            1.0,
-            1.0,
+            2.5,
+            2.5,
+            2.5,
         ]
     )
     

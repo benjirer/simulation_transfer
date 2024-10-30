@@ -34,6 +34,7 @@ class CarParams(NamedTuple):
     lecture 2 part 2
     c_m_1: max current of motor: [0.2 - 0.5] c_m_2: motor resistance due to shaft: [0.01 - 0.15]
     """
+
     m: Union[jax.Array, float] = jnp.array(1.65)  # [0.04, 0.08]
     i_com: Union[jax.Array, float] = jnp.array(2.78e-05)  # [1e-6, 5e-6]
     l_f: Union[jax.Array, float] = jnp.array(0.13)  # [0.025, 0.05]
@@ -52,7 +53,9 @@ class CarParams(NamedTuple):
     c_m_2: Union[jax.Array, float] = jnp.array(1.5003588)  # [0.00, 0.007]
     c_d: Union[jax.Array, float] = jnp.array(0.0)  # [0.01, 0.1]
     steering_limit: Union[jax.Array, float] = jnp.array(0.19989373)
-    use_blend: Union[jax.Array, float] = jnp.array(0.0)  # 0.0 -> (only kinematics), 1.0 -> (kinematics + dynamics)
+    use_blend: Union[jax.Array, float] = jnp.array(
+        0.0
+    )  # 0.0 -> (only kinematics), 1.0 -> (kinematics + dynamics)
 
     # parameters used to compute the blend ratio characteristics
     blend_ratio_ub: Union[jax.Array, float] = jnp.array([0.5477225575])
@@ -72,87 +75,167 @@ class GreenHouseParams(NamedTuple):
     beta: Union[jax.Array, float] = jnp.array(0.01)  # Heat absorption efficiency
     gamma: Union[jax.Array, float] = jnp.array(0.067)  # apparent psychometric constant
     epsilon: Union[jax.Array, float] = jnp.array(3.0)  # Cover heat resistance ratio
-    zeta: Union[jax.Array, float] = jnp.array(2.7060 * (10 ** (-5)))  # ventilation rate parameter
+    zeta: Union[jax.Array, float] = jnp.array(
+        2.7060 * (10 ** (-5))
+    )  # ventilation rate parameter
     eta: Union[jax.Array, float] = jnp.array(0.7)  # radiation conversion factor
-    theta: Union[jax.Array, float] = jnp.array(4.02 * (10 ** (-5)))  # ventilation rate parameter 1
-    kappa: Union[jax.Array, float] = jnp.array(5.03 * (10 ** (-5)))  # ventilation rate parameter 2
+    theta: Union[jax.Array, float] = jnp.array(
+        4.02 * (10 ** (-5))
+    )  # ventilation rate parameter 1
+    kappa: Union[jax.Array, float] = jnp.array(
+        5.03 * (10 ** (-5))
+    )  # ventilation rate parameter 2
     lam: Union[jax.Array, float] = jnp.array(0.46153)  # pressure constant
     mu: Union[jax.Array, float] = jnp.array(1.4667)  # Molar weight fraction C02 CH20
-    nu_2: Union[jax.Array, float] = jnp.array(3.68 * (10 ** (-5)))  # ventilation rate parameter 1
-    xi: Union[jax.Array, float] = jnp.array(6.3233 * (10 ** (-5)))  # ventilation rate parameter 2
+    nu_2: Union[jax.Array, float] = jnp.array(
+        3.68 * (10 ** (-5))
+    )  # ventilation rate parameter 1
+    xi: Union[jax.Array, float] = jnp.array(
+        6.3233 * (10 ** (-5))
+    )  # ventilation rate parameter 2
     rho_w: Union[jax.Array, float] = jnp.array(998)  # Density of water
     rho_a: Union[jax.Array, float] = jnp.array(1.29)  # Density of air
-    sigma: Union[jax.Array, float] = jnp.array(7.1708 * (10 ** (-5)))  # ventilation rate parameter 3
+    sigma: Union[jax.Array, float] = jnp.array(
+        7.1708 * (10 ** (-5))
+    )  # ventilation rate parameter 3
     tau: Union[jax.Array, float] = jnp.array(3.0)  # pipe heat transfer coefficient 1
     nu: Union[jax.Array, float] = jnp.array(0.74783)  # pipe heat transfer coefficient 2
     chi: Union[jax.Array, float] = jnp.array(0.0156)  # ventilation rate parameter 4
     psi: Union[jax.Array, float] = jnp.array(7.4 * (10 ** (-5)))
     omega: Union[jax.Array, float] = jnp.array(0.622)  # Humidity ratio
-    a1: Union[jax.Array, float] = jnp.array(0.611)  # Saturated vapour pressure parameter 1
-    a2: Union[jax.Array, float] = jnp.array(17.27)  # Saturated vapour pressure parameter 2
-    a3: Union[jax.Array, float] = jnp.array(239.0)  # Saturated vapour pressure parameter 3
+    a1: Union[jax.Array, float] = jnp.array(
+        0.611
+    )  # Saturated vapour pressure parameter 1
+    a2: Union[jax.Array, float] = jnp.array(
+        17.27
+    )  # Saturated vapour pressure parameter 2
+    a3: Union[jax.Array, float] = jnp.array(
+        239.0
+    )  # Saturated vapour pressure parameter 3
     ap: Union[jax.Array, float] = jnp.array(314.16)  # Heating pipe outer surface area
     b1: Union[jax.Array, float] = jnp.array(2.7)  # buffer_coefficient
-    cg: Union[jax.Array, float] = jnp.array(32 * (10 ** 3))  # green_house_heat_capacity
+    cg: Union[jax.Array, float] = jnp.array(32 * (10**3))  # green_house_heat_capacity
     cp_w: Union[jax.Array, float] = jnp.array(4180.0)  # specific_heat_water
-    cs: Union[jax.Array, float] = jnp.array(120 * (10 ** 3))  # green_house_soil_heat_capacity
+    cs: Union[jax.Array, float] = jnp.array(
+        120 * (10**3)
+    )  # green_house_soil_heat_capacity
     cp_a: Union[jax.Array, float] = jnp.array(1010)  # air_specific_heat_water
-    d1: Union[jax.Array, float] = jnp.array(2.1332 * (10 ** (-7)))  # plant development rate 1
-    d2: Union[jax.Array, float] = jnp.array(2.4664 * (10 ** (-7)))  # plant development rate 2
+    d1: Union[jax.Array, float] = jnp.array(
+        2.1332 * (10 ** (-7))
+    )  # plant development rate 1
+    d2: Union[jax.Array, float] = jnp.array(
+        2.4664 * (10 ** (-7))
+    )  # plant development rate 2
     d3: Union[jax.Array, float] = jnp.array(20)  # plant development rate 3
-    d4: Union[jax.Array, float] = jnp.array(7.4966 * (10 ** (-11)))  # plant development rate 4
+    d4: Union[jax.Array, float] = jnp.array(
+        7.4966 * (10 ** (-11))
+    )  # plant development rate 4
     f: Union[jax.Array, float] = jnp.array(1.2)  # fruit assimilate requirment
     f1: Union[jax.Array, float] = jnp.array(8.1019 * (10 ** (-7)))  # fruit growth rate
     f2: Union[jax.Array, float] = jnp.array(4.6296 * (10 ** (-6)))  # fruit growth rate
-    g1: Union[jax.Array, float] = jnp.array(20.3 * (10 ** (-3)))  # Leaf conductance parameter 1
+    g1: Union[jax.Array, float] = jnp.array(
+        20.3 * (10 ** (-3))
+    )  # Leaf conductance parameter 1
     g2: Union[jax.Array, float] = jnp.array(0.44)  # Leaf conductance parameter 2
-    g3: Union[jax.Array, float] = jnp.array(2.5 * (10 ** (-3)))  # Leaf conductance parameter 3
-    g4: Union[jax.Array, float] = jnp.array(3.1 * (10 ** (-4)))  # Leaf conductance parameter 4
+    g3: Union[jax.Array, float] = jnp.array(
+        2.5 * (10 ** (-3))
+    )  # Leaf conductance parameter 3
+    g4: Union[jax.Array, float] = jnp.array(
+        3.1 * (10 ** (-4))
+    )  # Leaf conductance parameter 4
     gb: Union[jax.Array, float] = jnp.array(10 ** (-2))  # Boundary layer conductance
-    kd: Union[jax.Array, float] = jnp.array(2.0)  # Soil to soil heat transfer coefficient
+    kd: Union[jax.Array, float] = jnp.array(
+        2.0
+    )  # Soil to soil heat transfer coefficient
     kr: Union[jax.Array, float] = jnp.array(7.9)  # Roof heat transfer coefficient
-    ks: Union[jax.Array, float] = jnp.array(5.75)  # Soil to air heat transfer coefficient
-    l1: Union[jax.Array, float] = jnp.array(2.501 * (10 ** 6))  # Vaporisation energy coefficient 1
-    l2: Union[jax.Array, float] = jnp.array(2.381 * (10 ** 3))  # Vaporisation energy coefficient 2
-    m1: Union[jax.Array, float] = jnp.array(1.0183 * (10 ** (-3)))  # mass transfer parameter
+    ks: Union[jax.Array, float] = jnp.array(
+        5.75
+    )  # Soil to air heat transfer coefficient
+    l1: Union[jax.Array, float] = jnp.array(
+        2.501 * (10**6)
+    )  # Vaporisation energy coefficient 1
+    l2: Union[jax.Array, float] = jnp.array(
+        2.381 * (10**3)
+    )  # Vaporisation energy coefficient 2
+    m1: Union[jax.Array, float] = jnp.array(
+        1.0183 * (10 ** (-3))
+    )  # mass transfer parameter
     m2: Union[jax.Array, float] = jnp.array(0.33)  # Mass transfer parameter 2
     Mco2: Union[jax.Array, float] = jnp.array(0.0044)  # Molar mass CO2
-    MF: Union[jax.Array, float] = jnp.array(1.157 * (10 ** (-7)))  # Fruit maintenance respiration coefficient
-    ML: Union[jax.Array, float] = jnp.array(2.894 * (10 ** (-7)))  # Vegetative maintenance respiration coefficient
-    mp: Union[jax.Array, float] = jnp.array(4.57)  # Watt to micromol conversion constant
-    p1: Union[jax.Array, float] = jnp.array(-2.17 * (10 ** (-4)))  # Net photosynthesis parameter 1 -> check these
-    p2: Union[jax.Array, float] = jnp.array(3.31 * (10 ** (-3)))  # Net photosynthesis parameter 2 -> check these
+    MF: Union[jax.Array, float] = jnp.array(
+        1.157 * (10 ** (-7))
+    )  # Fruit maintenance respiration coefficient
+    ML: Union[jax.Array, float] = jnp.array(
+        2.894 * (10 ** (-7))
+    )  # Vegetative maintenance respiration coefficient
+    mp: Union[jax.Array, float] = jnp.array(
+        4.57
+    )  # Watt to micromol conversion constant
+    p1: Union[jax.Array, float] = jnp.array(
+        -2.17 * (10 ** (-4))
+    )  # Net photosynthesis parameter 1 -> check these
+    p2: Union[jax.Array, float] = jnp.array(
+        3.31 * (10 ** (-3))
+    )  # Net photosynthesis parameter 2 -> check these
     p3: Union[jax.Array, float] = jnp.array(577.0)  # Net photosynthesis parameter 3
     p4: Union[jax.Array, float] = jnp.array(221.0)  # Net photosynthesis parameter 4
-    p5: Union[jax.Array, float] = jnp.array(5 * (10 ** (-5)))  # Net photosynthesis parameter 5 -> check these
+    p5: Union[jax.Array, float] = jnp.array(
+        5 * (10 ** (-5))
+    )  # Net photosynthesis parameter 5 -> check these
     patm: Union[jax.Array, float] = jnp.array(101.0)  # atmospheric pressure
-    pm: Union[jax.Array, float] = jnp.array(2.2538 * (10 ** (-3)))  # Maximum photosynthesis rate
+    pm: Union[jax.Array, float] = jnp.array(
+        2.2538 * (10 ** (-3))
+    )  # Maximum photosynthesis rate
     qg: Union[jax.Array, float] = jnp.array(2.0)  # fruit growth rate parameter
     qr: Union[jax.Array, float] = jnp.array(2.0)  # maintenance respiration
     rg: Union[jax.Array, float] = jnp.array(8.3144)  # Gas constant
-    s1: Union[jax.Array, float] = jnp.array(1.8407 ** (-4))  # saturated water vapour pressure curve slope parameter 1
+    s1: Union[jax.Array, float] = jnp.array(
+        1.8407 ** (-4)
+    )  # saturated water vapour pressure curve slope parameter 1
     s2: Union[jax.Array, float] = jnp.array(
-        9.7838 ** (10 ** (-4)))  # saturated water vapour pressure curve slope parameter 2
-    s3: Union[jax.Array, float] = jnp.array(0.051492)  # saturated water vapour pressure curve slope parameter 3
+        9.7838 ** (10 ** (-4))
+    )  # saturated water vapour pressure curve slope parameter 2
+    s3: Union[jax.Array, float] = jnp.array(
+        0.051492
+    )  # saturated water vapour pressure curve slope parameter 3
     T0: Union[jax.Array, float] = jnp.array(273.15)  # conversion from Celsius to K
     Tg: Union[jax.Array, float] = jnp.array(20.0)  # growth rate temperature reference
     Td: Union[jax.Array, float] = jnp.array(10.0)  # Deep soil temperature
-    Tr: Union[jax.Array, float] = jnp.array(25.0)  # Maintenance respiration reference temperature
-    v: Union[jax.Array, float] = jnp.array(1.23)  # Vegetative assimilate requirement coefficient
-    v1: Union[jax.Array, float] = jnp.array(1.3774)  # Vegetative fruit growth ratio parameter 1
-    v2: Union[jax.Array, float] = jnp.array(-0.168)  # Vegetative fruit growth ratio parameter 2
-    v3: Union[jax.Array, float] = jnp.array(19.0)  # Vegetative fruit growth ratio parameter 3
+    Tr: Union[jax.Array, float] = jnp.array(
+        25.0
+    )  # Maintenance respiration reference temperature
+    v: Union[jax.Array, float] = jnp.array(
+        1.23
+    )  # Vegetative assimilate requirement coefficient
+    v1: Union[jax.Array, float] = jnp.array(
+        1.3774
+    )  # Vegetative fruit growth ratio parameter 1
+    v2: Union[jax.Array, float] = jnp.array(
+        -0.168
+    )  # Vegetative fruit growth ratio parameter 2
+    v3: Union[jax.Array, float] = jnp.array(
+        19.0
+    )  # Vegetative fruit growth ratio parameter 3
     vp: Union[jax.Array, float] = jnp.array(7.85)  # Heating pipe volume
     vg_ag: Union[jax.Array, float] = jnp.array(10.0)  # Average greenhouse height
     wr: Union[jax.Array, float] = jnp.array(32.23)  # LAI correction function parameter
-    laim: Union[jax.Array, float] = jnp.array(2.511)  # LAI correction function parameter
-    yf: Union[jax.Array, float] = jnp.array(0.5983)  # Fruit harvest coefficient parameter 1
-    yl: Union[jax.Array, float] = jnp.array(0.5983)  # Fruit harvest coefficient parameter 2
-    z: Union[jax.Array, float] = jnp.array(0.6081)  # Leaf fraction of vegetative dry weight
+    laim: Union[jax.Array, float] = jnp.array(
+        2.511
+    )  # LAI correction function parameter
+    yf: Union[jax.Array, float] = jnp.array(
+        0.5983
+    )  # Fruit harvest coefficient parameter 1
+    yl: Union[jax.Array, float] = jnp.array(
+        0.5983
+    )  # Fruit harvest coefficient parameter 2
+    z: Union[jax.Array, float] = jnp.array(
+        0.6081
+    )  # Leaf fraction of vegetative dry weight
     phi: Union[jax.Array, float] = jnp.array(4 * (10 ** (-3)))  # heat valve opening
     rh: Union[jax.Array, float] = jnp.array(0.3)  # relative valve opening
     pg: Union[jax.Array, float] = jnp.array(0.475)  # PAR to global radiation ratio
     inj_scale: Union[jax.Array, float] = jnp.array(10 ** (-3))
+
 
 class SpotParams(NamedTuple):
     """
@@ -162,6 +245,7 @@ class SpotParams(NamedTuple):
     beta: Offset parameter for each state component
     gamma: Scaling action parameter
     """
+
     alpha_base_1: jax.Array = jnp.array(0.0)
     alpha_base_2: jax.Array = jnp.array(0.0)
     alpha_base_3: jax.Array = jnp.array(0.0)
@@ -207,14 +291,15 @@ class SpotParams(NamedTuple):
 
 
 class DynamicsModel(ABC):
-    def __init__(self,
-                 dt: float,
-                 x_dim: int,
-                 u_dim: int,
-                 params: PyTree,
-                 angle_idx: Optional[Union[int, jax.Array]] = None,
-                 dt_integration: float = 0.01,
-                 ):
+    def __init__(
+        self,
+        dt: float,
+        x_dim: int,
+        u_dim: int,
+        params: PyTree,
+        angle_idx: Optional[Union[int, jax.Array]] = None,
+        dt_integration: float = 0.01,
+    ):
         self.dt = dt
         self.x_dim = x_dim
         self.u_dim = u_dim
@@ -223,7 +308,9 @@ class DynamicsModel(ABC):
 
         self.dt_integration = dt_integration
         assert dt >= dt_integration
-        assert (dt / dt_integration - int(dt / dt_integration)) < 1e-4, 'dt must be multiple of dt_integration'
+        assert (
+            dt / dt_integration - int(dt / dt_integration)
+        ) < 1e-4, "dt must be multiple of dt_integration"
         self._num_steps_integrate = int(dt / dt_integration)
 
     def next_step(self, x: jax.Array, u: jax.Array, params: PyTree) -> jax.Array:
@@ -235,7 +322,9 @@ class DynamicsModel(ABC):
         if self.angle_idx is not None:
             theta = next_state[self.angle_idx]
             sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-            next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
+            next_state = next_state.at[self.angle_idx].set(
+                jnp.arctan2(sin_theta, cos_theta)
+            )
         return next_state
 
     def ode(self, x: jax.Array, u: jax.Array, params, *args, **kwargs) -> jax.Array:
@@ -251,13 +340,24 @@ class DynamicsModel(ABC):
         keys = jax.random.split(key, treedef.num_leaves)
         return jtu.tree_unflatten(treedef, keys)
 
-    def sample_params_uniform(self, key: jax.random.PRNGKey, sample_shape: Union[int, Tuple[int]],
-                              lower_bound: NamedTuple, upper_bound: NamedTuple):
+    def sample_params_uniform(
+        self,
+        key: jax.random.PRNGKey,
+        sample_shape: Union[int, Tuple[int]],
+        lower_bound: NamedTuple,
+        upper_bound: NamedTuple,
+    ):
         keys = self._split_key_like_tree(key)
         if isinstance(sample_shape, int):
             sample_shape = (sample_shape,)
-        return jtu.tree_map(lambda key, l, u: jax.random.uniform(key, shape=sample_shape + l.shape, minval=l, maxval=u),
-                            keys, lower_bound, upper_bound)
+        return jtu.tree_map(
+            lambda key, l, u: jax.random.uniform(
+                key, shape=sample_shape + l.shape, minval=l, maxval=u
+            ),
+            keys,
+            lower_bound,
+            upper_bound,
+        )
 
 
 class Pendulum(DynamicsModel):
@@ -266,13 +366,25 @@ class Pendulum(DynamicsModel):
         "render_fps": 30,
     }
 
-    def __init__(self, dt: float, params: PendulumParams = PendulumParams(), dt_integration: float = 0.005,
-                 encode_angle: bool = True):
-        super().__init__(dt=dt, x_dim=2, u_dim=1, params=params, angle_idx=0, dt_integration=dt_integration)
+    def __init__(
+        self,
+        dt: float,
+        params: PendulumParams = PendulumParams(),
+        dt_integration: float = 0.005,
+        encode_angle: bool = True,
+    ):
+        super().__init__(
+            dt=dt,
+            x_dim=2,
+            u_dim=1,
+            params=params,
+            angle_idx=0,
+            dt_integration=dt_integration,
+        )
         self.encode_angle = encode_angle
 
         # attributes for rendering
-        self.render_mode = 'human'
+        self.render_mode = "human"
         self.screen_dim = 500
         self.screen = None
         self.clock = None
@@ -287,21 +399,35 @@ class Pendulum(DynamicsModel):
 
         x0_dot = x[..., 1]
         # We add drag force: https://www.scirp.org/journal/paperinformation.aspx?paperid=73856
-        f_drag_linear = - params.nu * x[..., 1] / (params.m * params.l)
-        f_drag_second_order = - params.c_d / params.m * (x[..., 1]) ** 2
+        f_drag_linear = -params.nu * x[..., 1] / (params.m * params.l)
+        f_drag_second_order = -params.c_d / params.m * (x[..., 1]) ** 2
         f_drag = f_drag_linear + f_drag_second_order
-        x1_dot = params.g / params.l * jnp.sin(x[..., 0]) + u[..., 0] / (params.m * params.l ** 2) + f_drag
+        x1_dot = (
+            params.g / params.l * jnp.sin(x[..., 0])
+            + u[..., 0] / (params.m * params.l**2)
+            + f_drag
+        )
         return jnp.stack([x0_dot, x1_dot], axis=-1)
 
-    def next_step(self, x: jax.Array, u: jax.Array, params: PyTree, encode_angle: Optional[bool] = None) -> jax.Array:
+    def next_step(
+        self,
+        x: jax.Array,
+        u: jax.Array,
+        params: PyTree,
+        encode_angle: Optional[bool] = None,
+    ) -> jax.Array:
         if encode_angle is None:
             encode_angle = self.encode_angle
         if encode_angle:
             assert x.shape[-1] == 3
             theta = jnp.arctan2(x[..., 0], x[..., 1])
             x_radian = jnp.stack([theta, x[..., -1]], axis=-1)
-            theta_new, theta_dot_new = jnp.split(super().next_step(x_radian, u, params), 2, axis=-1)
-            next_state = jnp.concatenate([jnp.sin(theta_new), jnp.cos(theta_new), theta_dot_new], axis=-1)
+            theta_new, theta_dot_new = jnp.split(
+                super().next_step(x_radian, u, params), 2, axis=-1
+            )
+            next_state = jnp.concatenate(
+                [jnp.sin(theta_new), jnp.cos(theta_new), theta_dot_new], axis=-1
+            )
             assert next_state.shape == x.shape
             return next_state
         else:
@@ -365,7 +491,9 @@ class Pendulum(DynamicsModel):
         gfxdraw.filled_polygon(self.surf, transformed_coords, (204, 77, 77))
 
         gfxdraw.aacircle(self.surf, offset, offset, int(rod_width / 2), (204, 77, 77))
-        gfxdraw.filled_circle(self.surf, offset, offset, int(rod_width / 2), (204, 77, 77))
+        gfxdraw.filled_circle(
+            self.surf, offset, offset, int(rod_width / 2), (204, 77, 77)
+        )
 
         rod_end = (rod_length, 0)
         rod_end = pygame.math.Vector2(rod_end).rotate_rad(self.state[0] + jnp.pi / 2)
@@ -378,12 +506,16 @@ class Pendulum(DynamicsModel):
         )
 
         from gym.envs.classic_control import pendulum
+
         fname = os.path.join(os.path.dirname(pendulum.__file__), "assets/clockwise.png")
         img = pygame.image.load(fname)
         if self.last_u is not None:
             scale_img = pygame.transform.smoothscale(
                 img,
-                (scale * abs(float(self.last_u)) / 2, scale * float(abs(self.last_u)) / 2),
+                (
+                    scale * abs(float(self.last_u)) / 2,
+                    scale * float(abs(self.last_u)) / 2,
+                ),
             )
             is_flip = bool(self.last_u > 0)
             scale_img = pygame.transform.flip(scale_img, is_flip, True)
@@ -433,24 +565,48 @@ class RaceCar(DynamicsModel):
         Encodes angle to sin and cos if true
     """
 
-    def __init__(self, dt, encode_angle: bool = True, local_coordinates: bool = False, rk_integrator: bool = True):
+    def __init__(
+        self,
+        dt,
+        encode_angle: bool = True,
+        local_coordinates: bool = False,
+        rk_integrator: bool = True,
+    ):
         self.encode_angle = encode_angle
         x_dim = 6
-        super().__init__(dt=dt, x_dim=x_dim, u_dim=2, params=CarParams(), angle_idx=2,
-                         dt_integration=1 / 90.)
+        super().__init__(
+            dt=dt,
+            x_dim=x_dim,
+            u_dim=2,
+            params=CarParams(),
+            angle_idx=2,
+            dt_integration=1 / 90.0,
+        )
         self.local_coordinates = local_coordinates
         self.angle_idx = 2
         self.velocity_start_idx = 4 if self.encode_angle else 3
         self.velocity_end_idx = 5 if self.encode_angle else 4
         self.rk_integrator = rk_integrator
 
-    def rk_integration(self, x: jnp.array, u: jnp.array, params: CarParams) -> jnp.array:
-        integration_factors = jnp.asarray([self.dt_integration / 2.,
-                                           self.dt_integration / 2., self.dt_integration,
-                                           self.dt_integration])
-        integration_weights = jnp.asarray([self.dt_integration / 6.,
-                                           self.dt_integration / 3., self.dt_integration / 3.0,
-                                           self.dt_integration / 6.0])
+    def rk_integration(
+        self, x: jnp.array, u: jnp.array, params: CarParams
+    ) -> jnp.array:
+        integration_factors = jnp.asarray(
+            [
+                self.dt_integration / 2.0,
+                self.dt_integration / 2.0,
+                self.dt_integration,
+                self.dt_integration,
+            ]
+        )
+        integration_weights = jnp.asarray(
+            [
+                self.dt_integration / 6.0,
+                self.dt_integration / 3.0,
+                self.dt_integration / 3.0,
+                self.dt_integration / 6.0,
+            ]
+        )
 
         def body(carry, _):
             """one step of rk integration.
@@ -477,20 +633,28 @@ class RaceCar(DynamicsModel):
         if self.angle_idx is not None:
             theta = next_state[self.angle_idx]
             sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-            next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
+            next_state = next_state.at[self.angle_idx].set(
+                jnp.arctan2(sin_theta, cos_theta)
+            )
         return next_state
 
     def next_step(self, x: jnp.array, u: jnp.array, params: CarParams) -> jnp.array:
-        theta_x = jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1]) if self.encode_angle else \
-            x[..., self.angle_idx]
+        theta_x = (
+            jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
+            if self.encode_angle
+            else x[..., self.angle_idx]
+        )
         offset = jnp.clip(params.angle_offset, -jnp.pi, jnp.pi)
         theta_x = theta_x + offset
         if not self.local_coordinates:
             # rotate velocity to local frame to compute dx
-            velocity_global = x[..., self.velocity_start_idx: self.velocity_end_idx + 1]
-            rotated_vel = self.rotate_vector(velocity_global,
-                                             -theta_x)
-            x = x.at[..., self.velocity_start_idx: self.velocity_end_idx + 1].set(rotated_vel)
+            velocity_global = x[
+                ..., self.velocity_start_idx : self.velocity_end_idx + 1
+            ]
+            rotated_vel = self.rotate_vector(velocity_global, -theta_x)
+            x = x.at[..., self.velocity_start_idx : self.velocity_end_idx + 1].set(
+                rotated_vel
+            )
         if self.encode_angle:
             x_reduced = self.reduce_x(x)
             if self.rk_integrator:
@@ -498,8 +662,15 @@ class RaceCar(DynamicsModel):
             else:
                 x_reduced = super().next_step(x_reduced, u, params)
             next_theta = jnp.atleast_1d(x_reduced[..., self.angle_idx])
-            next_x = jnp.concatenate([x_reduced[..., 0:self.angle_idx], jnp.sin(next_theta), jnp.cos(next_theta),
-                                      x_reduced[..., self.angle_idx + 1:]], axis=-1)
+            next_x = jnp.concatenate(
+                [
+                    x_reduced[..., 0 : self.angle_idx],
+                    jnp.sin(next_theta),
+                    jnp.cos(next_theta),
+                    x_reduced[..., self.angle_idx + 1 :],
+                ],
+                axis=-1,
+            )
         else:
             if self.rk_integrator:
                 next_x = self.rk_integration(x, u, params)
@@ -508,26 +679,38 @@ class RaceCar(DynamicsModel):
 
         if self.local_coordinates:
             # convert position to local frame
-            pos = next_x[..., 0:self.angle_idx] - x[..., 0:self.angle_idx]
+            pos = next_x[..., 0 : self.angle_idx] - x[..., 0 : self.angle_idx]
             rotated_pos = self.rotate_vector(pos, -theta_x)
-            next_x = next_x.at[..., 0:self.angle_idx].set(rotated_pos)
+            next_x = next_x.at[..., 0 : self.angle_idx].set(rotated_pos)
         else:
             # convert velocity to global frame
-            new_theta_x = jnp.arctan2(next_x[..., self.angle_idx], next_x[..., self.angle_idx + 1]) \
-                if self.encode_angle else next_x[..., self.angle_idx]
+            new_theta_x = (
+                jnp.arctan2(
+                    next_x[..., self.angle_idx], next_x[..., self.angle_idx + 1]
+                )
+                if self.encode_angle
+                else next_x[..., self.angle_idx]
+            )
             new_theta_x = new_theta_x + offset
-            velocity = next_x[..., self.velocity_start_idx: self.velocity_end_idx + 1]
+            velocity = next_x[..., self.velocity_start_idx : self.velocity_end_idx + 1]
             rotated_vel = self.rotate_vector(velocity, new_theta_x)
-            next_x = next_x.at[..., self.velocity_start_idx: self.velocity_end_idx + 1].set(rotated_vel)
+            next_x = next_x.at[
+                ..., self.velocity_start_idx : self.velocity_end_idx + 1
+            ].set(rotated_vel)
 
         return next_x
 
     def reduce_x(self, x):
         theta = jnp.arctan2(x[..., self.angle_idx], x[..., self.angle_idx + 1])
 
-        x_reduced = jnp.concatenate([x[..., 0:self.angle_idx], jnp.atleast_1d(theta),
-                                     x[..., self.velocity_start_idx:]],
-                                    axis=-1)
+        x_reduced = jnp.concatenate(
+            [
+                x[..., 0 : self.angle_idx],
+                jnp.atleast_1d(theta),
+                x[..., self.velocity_start_idx :],
+            ],
+            axis=-1,
+        )
         return x_reduced
 
     @staticmethod
@@ -569,17 +752,11 @@ class RaceCar(DynamicsModel):
 
         delta, d = u[0], u[1]
 
-        alpha_f = - jnp.arctan(
-            (w * l_f + v_y) /
-            (v_x + 1e-6)
-        ) + delta
-        alpha_r = jnp.arctan(
-            (w * l_r - v_y) /
-            (v_x + 1e-6)
-        )
+        alpha_f = -jnp.arctan((w * l_f + v_y) / (v_x + 1e-6)) + delta
+        alpha_r = jnp.arctan((w * l_r - v_y) / (v_x + 1e-6))
         f_f_y = d_f * jnp.sin(c_f * jnp.arctan(b_f * alpha_f))
         f_r_y = d_r * jnp.sin(c_r * jnp.arctan(b_r * alpha_r))
-        f_r_x = (c_m_1 * d - (c_m_2 ** 2) * v_x - (c_d ** 2) * (v_x * jnp.abs(v_x)))
+        f_r_x = c_m_1 * d - (c_m_2**2) * v_x - (c_d**2) * (v_x * jnp.abs(v_x))
 
         v_x_dot = (f_r_x - f_f_y * jnp.sin(delta) + m * v_y * w) / m
         v_y_dot = (f_r_y + f_f_y * jnp.cos(delta) - m * v_x * w) / m
@@ -641,7 +818,7 @@ class RaceCar(DynamicsModel):
         c_d = params.c_d
         delta, d = u[0], u[1]
         v_r = v_x
-        v_r_dot = (c_m_1 * d - (c_m_2 ** 2) * v_r - (c_d ** 2) * (v_r * jnp.abs(v_r))) / m
+        v_r_dot = (c_m_1 * d - (c_m_2**2) * v_r - (c_d**2) * (v_r * jnp.abs(v_r))) / m
         beta = jnp.arctan(jnp.tan(delta) * 1 / (l_r + l_f))
         v_x_dot = v_r_dot * jnp.cos(beta)
         # Determine accelerations from the kinematic model using FD.
@@ -676,11 +853,9 @@ class RaceCar(DynamicsModel):
         v_x = x[3]
         blend_ratio_ub = jnp.square(params.blend_ratio_ub)
         blend_ratio_lb = jnp.square(params.blend_ratio_lb)
-        blend_ratio = (v_x - blend_ratio_ub) / (blend_ratio_lb + 1E-6)
+        blend_ratio = (v_x - blend_ratio_ub) / (blend_ratio_lb + 1e-6)
         blend_ratio = blend_ratio.squeeze()
-        lambda_blend = jnp.min(jnp.asarray([
-            jnp.max(jnp.asarray([blend_ratio, 0])), 1])
-        )
+        lambda_blend = jnp.min(jnp.asarray([jnp.max(jnp.asarray([blend_ratio, 0])), 1]))
         dx_kin_full = self._compute_dx_kin(x, u, params)
         dx_dyn = self._ode_dyn(x=x, u=u, params=params)
         dx_blend = lambda_blend * dx_dyn + (1 - lambda_blend) * dx_kin_full
@@ -706,7 +881,7 @@ class RaceCar(DynamicsModel):
         """
         delta, d = u[0], u[1]
         delta = jnp.clip(delta, a_min=-1, a_max=1) * params.steering_limit
-        d = jnp.clip(d, a_min=-1., a_max=1)  # throttle
+        d = jnp.clip(d, a_min=-1.0, a_max=1)  # throttle
         u = u.at[0].set(delta)
         u = u.at[1].set(d)
         dx = self._compute_dx(x, u, params)
@@ -717,14 +892,15 @@ class SergioDynamics(ABC):
     lam_lb: float = 0.2
     lam_ub: float = 0.9
 
-    def __init__(self,
-                 dt: float,
-                 n_cells: int,
-                 n_genes: int,
-                 params: SergioParams = SergioParams(),
-                 dt_integration: float = 0.01,
-                 state_ub: float = 500.0,
-                 ):
+    def __init__(
+        self,
+        dt: float,
+        n_cells: int,
+        n_genes: int,
+        params: SergioParams = SergioParams(),
+        dt_integration: float = 0.01,
+        state_ub: float = 500.0,
+    ):
         super().__init__()
         self.dt = dt
         self.n_cells = n_cells
@@ -734,7 +910,9 @@ class SergioDynamics(ABC):
         self.state_ub = state_ub
         self.dt_integration = dt_integration
         assert dt >= dt_integration
-        assert (dt / dt_integration - int(dt / dt_integration)) < 1e-4, 'dt must be multiple of dt_integration'
+        assert (
+            dt / dt_integration - int(dt / dt_integration)
+        ) < 1e-4, "dt must be multiple of dt_integration"
         self._num_steps_integrate = int(dt / dt_integration)
 
     def next_step(self, x: jax.Array, params: PyTree) -> jax.Array:
@@ -796,7 +974,7 @@ class SergioDynamics(ABC):
         assert x.shape == (self.n_cells * self.n_genes,)
         x = x.reshape(self.n_cells, self.n_genes)
         production_rate = self.production_rate(x, params)
-        x_next = (production_rate - params.lam * x)
+        x_next = production_rate - params.lam * x
         x_next = x_next.reshape(self.n_cells * self.n_genes)
         return x_next
 
@@ -805,28 +983,49 @@ class SergioDynamics(ABC):
         keys = jax.random.split(key, treedef.num_leaves)
         return jtu.tree_unflatten(treedef, keys)
 
-    def sample_single_params(self, key: jax.random.PRNGKey, lower_bound: SergioParams, upper_bound: SergioParams):
+    def sample_single_params(
+        self,
+        key: jax.random.PRNGKey,
+        lower_bound: SergioParams,
+        upper_bound: SergioParams,
+    ):
         lam_key, contrib_key, basal_key, graph_key, power_key = jax.random.split(key, 5)
-        lam = jax.random.uniform(lam_key, shape=(self.n_cells, self.n_genes), minval=lower_bound.lam,
-                                 maxval=upper_bound.lam)
+        lam = jax.random.uniform(
+            lam_key,
+            shape=(self.n_cells, self.n_genes),
+            minval=lower_bound.lam,
+            maxval=upper_bound.lam,
+        )
 
-        contribution_rates = jax.random.uniform(contrib_key, shape=(self.n_cells,
-                                                                    self.n_genes,
-                                                                    self.n_genes),
-                                                minval=lower_bound.contribution_rates,
-                                                maxval=upper_bound.contribution_rates)
-        basal_rates = jax.random.uniform(basal_key, shape=(self.n_cells,
-                                                           self.n_genes),
-                                         minval=lower_bound.basal_rates,
-                                         maxval=upper_bound.basal_rates)
+        contribution_rates = jax.random.uniform(
+            contrib_key,
+            shape=(self.n_cells, self.n_genes, self.n_genes),
+            minval=lower_bound.contribution_rates,
+            maxval=upper_bound.contribution_rates,
+        )
+        basal_rates = jax.random.uniform(
+            basal_key,
+            shape=(self.n_cells, self.n_genes),
+            minval=lower_bound.basal_rates,
+            maxval=upper_bound.basal_rates,
+        )
 
         lower_bound_graph = jnp.clip(lower_bound.graph, 0, 2)
         upper_bound_graph = jnp.clip(upper_bound.graph, 0, 2)
-        graph = jax.random.randint(graph_key, shape=(self.n_genes, self.n_genes), minval=lower_bound_graph,
-                                   maxval=upper_bound_graph) * 1.0
+        graph = (
+            jax.random.randint(
+                graph_key,
+                shape=(self.n_genes, self.n_genes),
+                minval=lower_bound_graph,
+                maxval=upper_bound_graph,
+            )
+            * 1.0
+        )
         diag_elements = jnp.diag_indices_from(graph)
         graph = graph.at[diag_elements].set(1.0)
-        power = jax.random.uniform(power_key, shape=(1,), minval=lower_bound.power, maxval=upper_bound.power)
+        power = jax.random.uniform(
+            power_key, shape=(1,), minval=lower_bound.power, maxval=upper_bound.power
+        )
         return SergioParams(
             lam=lam,
             contribution_rates=contribution_rates,
@@ -835,14 +1034,20 @@ class SergioDynamics(ABC):
             graph=graph,
         )
 
-    def sample_params_uniform(self, key: jax.random.PRNGKey, sample_shape: Union[int, Tuple[int]],
-                              lower_bound: NamedTuple, upper_bound: NamedTuple):
+    def sample_params_uniform(
+        self,
+        key: jax.random.PRNGKey,
+        sample_shape: Union[int, Tuple[int]],
+        lower_bound: NamedTuple,
+        upper_bound: NamedTuple,
+    ):
         if isinstance(sample_shape, int):
             keys = jax.random.split(key, sample_shape)
         else:
             keys = jax.random.split(key, np.prod(sample_shape))
-        sampled_params = jax.vmap(self.sample_single_params,
-                                  in_axes=(0, None, None))(keys, lower_bound, upper_bound)
+        sampled_params = jax.vmap(self.sample_single_params, in_axes=(0, None, None))(
+            keys, lower_bound, upper_bound
+        )
         return sampled_params
 
 
@@ -850,26 +1055,49 @@ class GreenHouseDynamics(DynamicsModel):
     state_ub = jnp.array(
         [
             # t_g, t_p, t_s, c_i, v_i, mb, mf, ml, d_p, t_o, t_d, c_o, v_o, w, G, t
-            30, 50, 20, 8, 2.5 * 10 ** (-2), 10, 150, 15, 1.0, 30.0, 10.0, 0.5, 1.2 * 10 ** (-2), 5, 500, 10 ** 6,
-
-        ])
-
-    state_lb = jnp.array(
-        [
-            0, 0, -10, 0, 0, 0, 0, 0, 0, -5, 8.0, 0, 10 ** (-4), 0, 0, 0
+            30,
+            50,
+            20,
+            8,
+            2.5 * 10 ** (-2),
+            10,
+            150,
+            15,
+            1.0,
+            30.0,
+            10.0,
+            0.5,
+            1.2 * 10 ** (-2),
+            5,
+            500,
+            10**6,
         ]
     )
 
+    state_lb = jnp.array([0, 0, -10, 0, 0, 0, 0, 0, 0, -5, 8.0, 0, 10 ** (-4), 0, 0, 0])
+
     constraint_lb = jnp.array(
-        [
-            -273.15, -273.15, -273.15, 0, 0, 0, 0, 0, 0, -273.15, -273.15, 0, 0, 0, 0, 0
-        ]
+        [-273.15, -273.15, -273.15, 0, 0, 0, 0, 0, 0, -273.15, -273.15, 0, 0, 0, 0, 0]
     )
 
     constraint_ub = jnp.array(
         [
-            200, 200, 200, jnp.inf, jnp.inf, jnp.inf, jnp.inf, jnp.inf, 1, 200, 200, jnp.inf, jnp.inf, 10, jnp.inf,
-            jnp.inf
+            200,
+            200,
+            200,
+            jnp.inf,
+            jnp.inf,
+            jnp.inf,
+            jnp.inf,
+            jnp.inf,
+            1,
+            200,
+            200,
+            jnp.inf,
+            jnp.inf,
+            10,
+            jnp.inf,
+            jnp.inf,
         ]
     )
 
@@ -884,8 +1112,22 @@ class GreenHouseDynamics(DynamicsModel):
 
     noise_std = jnp.array(
         [
-            0.05, 0.1, 0.05, 0.01, 0.05, 0.05, 0.1, 0.1, 0.01, noise_to,
-            noise_td, noise_co, noise_vo, noise_w, noise_g, 0.1,
+            0.05,
+            0.1,
+            0.05,
+            0.01,
+            0.05,
+            0.05,
+            0.1,
+            0.1,
+            0.01,
+            noise_to,
+            noise_td,
+            noise_co,
+            noise_vo,
+            noise_w,
+            noise_g,
+            0.1,
         ]
     )
 
@@ -895,8 +1137,9 @@ class GreenHouseDynamics(DynamicsModel):
         self.greenhouse_state_dim = 5
         self.crop_states = 4
         self.exogenous_states = 6
-        self.state_dim = self.greenhouse_state_dim + self.crop_states \
-                         + self.exogenous_states + 1  # 1 additional state for time
+        self.state_dim = (
+            self.greenhouse_state_dim + self.crop_states + self.exogenous_states + 1
+        )  # 1 additional state for time
         self.greenhouse_input_dim = 4
         self.eps = 1e-8
         params = GreenHouseParams()
@@ -909,7 +1152,9 @@ class GreenHouseDynamics(DynamicsModel):
             dt_integration=60,
         )
 
-    def next_step(self, x: jnp.array, u: jnp.array, params: GreenHouseParams) -> jnp.array:
+    def next_step(
+        self, x: jnp.array, u: jnp.array, params: GreenHouseParams
+    ) -> jnp.array:
         x, u = self.transform_state(x), self.transform_action(u)
 
         def body(carry, _):
@@ -950,7 +1195,7 @@ class GreenHouseDynamics(DynamicsModel):
     def get_respiration_param(self, x, u, params: GreenHouseParams):
         # ml = x[self.greenhouse_state_dim + 2]
         # l_lai = (ml / params.wr) ** (params.laim) / (1 + (ml / params.wr) ** (params.laim))
-        R = - params.p1 - params.p5
+        R = -params.p1 - params.p5
         return R
 
     def get_crop_photosynthesis(self, x, u, params: GreenHouseParams):
@@ -964,8 +1209,17 @@ class GreenHouseDynamics(DynamicsModel):
         # c_ppm: units 10^-6 [] -> need to multiply with 10^-6 to get right units
         # c_ppm = 1/mol * g/kg
         c_ppm = params.rg / (params.patm * params.Mco2) * (t_g + params.T0) * c_i
-        l_lai = (ml / params.wr) ** (params.laim) / (1 + (ml / params.wr) ** (params.laim))
-        p_g = params.pm * l_lai * i_par / (params.p3 + i_par) * c_ppm / (params.p4 + c_ppm)
+        l_lai = (ml / params.wr) ** (params.laim) / (
+            1 + (ml / params.wr) ** (params.laim)
+        )
+        p_g = (
+            params.pm
+            * l_lai
+            * i_par
+            / (params.p3 + i_par)
+            * c_ppm
+            / (params.p4 + c_ppm)
+        )
         return p_g
 
     def get_harvest_coefficient(self, x, u, params: GreenHouseParams):
@@ -993,52 +1247,79 @@ class GreenHouseDynamics(DynamicsModel):
         # C, C, C, m, g/m^3, kg/m^-3
         t_g, t_p, t_s, c_i, v_i = x[0], x[1], x[2], x[3], x[4]
         # g/m^-2, g/m^-2, g/m^-2, []
-        mb, mf, ml, d_p = x[self.greenhouse_state_dim], x[self.greenhouse_state_dim + 1], \
-            x[self.greenhouse_state_dim + 2], x[self.greenhouse_state_dim + 3]
+        mb, mf, ml, d_p = (
+            x[self.greenhouse_state_dim],
+            x[self.greenhouse_state_dim + 1],
+            x[self.greenhouse_state_dim + 2],
+            x[self.greenhouse_state_dim + 3],
+        )
         t = x[-1]
         egs_start_idx = self.greenhouse_state_dim + self.crop_states
         # C, C, g/m^3, kg/m^-3, m/s, w/m^-2
-        t_o, t_d, c_o, v_o, w, G = x[egs_start_idx], x[egs_start_idx + 1], \
-            x[egs_start_idx + 2], x[egs_start_idx + 3], x[egs_start_idx + 4], x[egs_start_idx + 5]
+        t_o, t_d, c_o, v_o, w, G = (
+            x[egs_start_idx],
+            x[egs_start_idx + 1],
+            x[egs_start_idx + 2],
+            x[egs_start_idx + 3],
+            x[egs_start_idx + 4],
+            x[egs_start_idx + 5],
+        )
         t_h, rwl, rww, phi_c = u[0], u[1], u[2], u[3]
-        phi_v = (params.sigma * rwl / (1 + params.chi * rwl) + params.zeta + params.xi * rww) * w \
-                + params.psi
+        phi_v = (
+            params.sigma * rwl / (1 + params.chi * rwl) + params.zeta + params.xi * rww
+        ) * w + params.psi
         k_v = params.rho_a * params.cp_a * phi_v
         alpha = params.nu * jnp.sqrt(params.tau + jnp.sqrt(jnp.abs(t_g - t_p)))
         s = params.s1 * jnp.power(t_g, 2) + params.s2 * t_g + params.s3
         p_g_star = params.a1 * jnp.exp((params.a2 * t_g) / (params.a3 + t_g + self.eps))
         # convert temp to Kelvin and then from pascal to kpa. v_i is in g/m^3
-        p_g = (params.lam * (t_g + params.T0) * v_i)
+        p_g = params.lam * (t_g + params.T0) * v_i
         Dg = p_g_star - p_g
         # g1: mm/s, g2: [], g4: m^3/g, g3: s m ^2 /micromol
-        g = params.g1 * (1 - params.g2 * jnp.exp(-params.g3 * G)) * jnp.exp(-params.g4 * c_i)
+        g = (
+            params.g1
+            * (1 - params.g2 * jnp.exp(-params.g3 * G))
+            * jnp.exp(-params.g4 * c_i)
+        )
         l = params.l1 - params.l2 * t_g
         # gb: mm/s^-1, rho_a = kg/m^-3, cp_a: J/(C kg), Dg: kPa, E:g/(sm^2)
         # G: W/m^2, s: KPa/C
-        E = (s * params.eta * G + params.rho_a * params.cp_a * Dg * params.gb) / (l * (s
-                                                                                       + params.gamma * (1
-                                                                                                         + params.gb / g)
-                                                                                       ))
+        E = (s * params.eta * G + params.rho_a * params.cp_a * Dg * params.gb) / (
+            l * (s + params.gamma * (1 + params.gb / g))
+        )
         Wg = params.omega * p_g / (params.patm - p_g + self.eps)
         Wc = params.omega * p_g_star / (params.patm - p_g_star + self.eps)
 
         t_c = params.epsilon / (params.epsilon + 1) * t_o + 1 / params.epsilon * t_g
         Mc = jax.nn.relu(Wg - Wc) * params.m1 * (jnp.abs(t_g - t_c) ** params.m2)
-        dt_g_dt = (k_v + params.kr) * (t_o - t_g) + alpha * (t_p - t_g) + params.ks * (t_s - t_g) \
-                  + G * params.eta - l * E + l / (1 + params.epsilon) * Mc
+        dt_g_dt = (
+            (k_v + params.kr) * (t_o - t_g)
+            + alpha * (t_p - t_g)
+            + params.ks * (t_s - t_g)
+            + G * params.eta
+            - l * E
+            + l / (1 + params.epsilon) * Mc
+        )
         dt_g_dt = dt_g_dt / params.cg
 
         phi = params.phi
         rh = params.rh
         phi = 2 * phi * rh / (2 - rh)
-        dt_p_dt = params.ap / (params.rho_w * params.cp_w) * (params.beta * G - alpha * (t_p - t_g)) + phi * (
-                t_h - t_p)
+        dt_p_dt = params.ap / (params.rho_w * params.cp_w) * (
+            params.beta * G - alpha * (t_p - t_g)
+        ) + phi * (t_h - t_p)
         dt_p_dt = dt_p_dt / params.vp
 
-        dt_s_dt = 1 / params.cs * (params.ks * (t_g - t_s) + params.kd * (params.Td - t_s))
+        dt_s_dt = (
+            1 / params.cs * (params.ks * (t_g - t_s) + params.kd * (params.Td - t_s))
+        )
 
-        dc_i_dt = phi_v * (c_o - c_i) + phi_c * params.inj_scale \
-                  + self.get_respiration_param(x, u, params) - params.mu * self.get_crop_photosynthesis(x, u, params)
+        dc_i_dt = (
+            phi_v * (c_o - c_i)
+            + phi_c * params.inj_scale
+            + self.get_respiration_param(x, u, params)
+            - params.mu * self.get_crop_photosynthesis(x, u, params)
+        )
         dc_i_dt = dc_i_dt / params.vg_ag
 
         dv_i_dt = (E / 1000 - phi_v * (v_i - v_o) - Mc / 1000) / params.vg_ag
@@ -1048,9 +1329,11 @@ class GreenHouseDynamics(DynamicsModel):
         g_f = (params.f1 - params.f2 * d_p) * (params.qg ** ((t_g - params.Tg) / 10.0))
         g_l = g_f * params.v1 * jnp.exp(params.v2 * (t_g - params.v3))
         b = self.buffer_switching_func(mb, params.b1)
-        buff_1 = self.buffer_switching_func(params.f * g_f * mf + params.v * g_l * ml / params.z, params.b1)
+        buff_1 = self.buffer_switching_func(
+            params.f * g_f * mf + params.v * g_l * ml / params.z, params.b1
+        )
         # buff_1 = b * (params.f * g_f * mf + params.v * g_l * ml / params.z)
-        factor = (params.qr ** ((t_g - params.Tg) / 10.0))
+        factor = params.qr ** ((t_g - params.Tg) / 10.0)
         rf = params.MF * factor
         rl = params.ML * factor
         buff_2 = self.buffer_switching_func(rf * mf + rl * ml / params.z, params.b1)
@@ -1074,40 +1357,76 @@ class GreenHouseDynamics(DynamicsModel):
         # Time
         dt_dt = jnp.ones_like(dt_g_dt)
 
-        dx_dt = jnp.stack([
-            dt_g_dt, dt_p_dt, dt_s_dt, dc_i_dt, dv_i_dt,
-            dmb_dt, dmf_dt, dml_dt, dd_p_dt,
-            dt_o_dt, dt_d_dt, dc_o_dt, dv_o_dt, dw_dt, dG_dt, dt_dt,
-        ])
+        dx_dt = jnp.stack(
+            [
+                dt_g_dt,
+                dt_p_dt,
+                dt_s_dt,
+                dc_i_dt,
+                dv_i_dt,
+                dmb_dt,
+                dmf_dt,
+                dml_dt,
+                dd_p_dt,
+                dt_o_dt,
+                dt_d_dt,
+                dc_o_dt,
+                dv_o_dt,
+                dw_dt,
+                dG_dt,
+                dt_dt,
+            ]
+        )
         return dx_dt
 
     def _greenhouse_dynamics_lf(self, x, u, params: GreenHouseParams):
         # C, C, C, m, g/m^3, kg/m^-3
         t_g, t_p, t_s, c_i, v_i = x[0], x[1], x[2], x[3], x[4]
         # g/m^-2, g/m^-2, g/m^-2, []
-        mb, mf, ml, d_p = x[self.greenhouse_state_dim], x[self.greenhouse_state_dim + 1], \
-            x[self.greenhouse_state_dim + 2], x[self.greenhouse_state_dim + 3]
+        mb, mf, ml, d_p = (
+            x[self.greenhouse_state_dim],
+            x[self.greenhouse_state_dim + 1],
+            x[self.greenhouse_state_dim + 2],
+            x[self.greenhouse_state_dim + 3],
+        )
         t = x[-1]
         egs_start_idx = self.greenhouse_state_dim + self.crop_states
         # C, C, g/m^3, kg/m^-3, m/s, w/m^-2
-        t_o, t_d, c_o, v_o, w, G = x[egs_start_idx], x[egs_start_idx + 1], \
-            x[egs_start_idx + 2], x[egs_start_idx + 3], x[egs_start_idx + 4], x[egs_start_idx + 5]
+        t_o, t_d, c_o, v_o, w, G = (
+            x[egs_start_idx],
+            x[egs_start_idx + 1],
+            x[egs_start_idx + 2],
+            x[egs_start_idx + 3],
+            x[egs_start_idx + 4],
+            x[egs_start_idx + 5],
+        )
         t_h, rwl, rww, phi_c = u[0], u[1], u[2], u[3]
-        phi_v = (params.sigma * rwl / (1 + params.chi * rwl) + params.zeta + params.xi * rww) * w \
-                + params.psi
+        phi_v = (
+            params.sigma * rwl / (1 + params.chi * rwl) + params.zeta + params.xi * rww
+        ) * w + params.psi
         k_v = params.rho_a * params.cp_a * phi_v
 
         alpha = params.nu * jnp.sqrt(params.tau)
-        dt_g_dt = (k_v + params.kr) * (t_o - t_g) + params.ks * (t_s - t_g) \
-                  + G * params.eta + alpha * (t_h - t_g)
+        dt_g_dt = (
+            (k_v + params.kr) * (t_o - t_g)
+            + params.ks * (t_s - t_g)
+            + G * params.eta
+            + alpha * (t_h - t_g)
+        )
         dt_g_dt = dt_g_dt / params.cg
 
         dt_p_dt = jnp.zeros_like(dt_g_dt)
 
-        dt_s_dt = 1 / params.cs * (params.ks * (t_g - t_s) + params.kd * (params.Td - t_s))
+        dt_s_dt = (
+            1 / params.cs * (params.ks * (t_g - t_s) + params.kd * (params.Td - t_s))
+        )
 
-        dc_i_dt = phi_v * (c_o - c_i) + phi_c * params.inj_scale \
-                  + self.get_respiration_param(x, u, params) - params.mu * self.get_crop_photosynthesis(x, u, params)
+        dc_i_dt = (
+            phi_v * (c_o - c_i)
+            + phi_c * params.inj_scale
+            + self.get_respiration_param(x, u, params)
+            - params.mu * self.get_crop_photosynthesis(x, u, params)
+        )
         dc_i_dt = dc_i_dt / params.vg_ag
 
         dv_i_dt = jnp.zeros_like(dt_g_dt)
@@ -1117,9 +1436,11 @@ class GreenHouseDynamics(DynamicsModel):
         g_f = (params.f1 - params.f2 * d_p) * (params.qg ** ((t_g - params.Tg) / 10.0))
         g_l = g_f * params.v1 * jnp.exp(params.v2 * (t_g - params.v3))
         b = self.buffer_switching_func(mb, params.b1)
-        buff_1 = self.buffer_switching_func(params.f * g_f * mf + params.v * g_l * ml / params.z, params.b1)
+        buff_1 = self.buffer_switching_func(
+            params.f * g_f * mf + params.v * g_l * ml / params.z, params.b1
+        )
         # buff_1 = b * (params.f * g_f * mf + params.v * g_l * ml / params.z)
-        factor = (params.qr ** ((t_g - params.Tg) / 10.0))
+        factor = params.qr ** ((t_g - params.Tg) / 10.0)
         rf = params.MF * factor
         rl = params.ML * factor
         buff_2 = self.buffer_switching_func(rf * mf + rl * ml / params.z, params.b1)
@@ -1144,19 +1465,41 @@ class GreenHouseDynamics(DynamicsModel):
         # Time
         dt_dt = jnp.ones_like(dt_g_dt)
 
-        dx_dt = jnp.stack([
-            dt_g_dt, dt_p_dt, dt_s_dt, dc_i_dt, dv_i_dt,
-            dmb_dt, dmf_dt, dml_dt, dd_p_dt,
-            dt_o_dt, dt_d_dt, dc_o_dt, dv_o_dt, dw_dt, dG_dt, dt_dt,
-        ])
+        dx_dt = jnp.stack(
+            [
+                dt_g_dt,
+                dt_p_dt,
+                dt_s_dt,
+                dc_i_dt,
+                dv_i_dt,
+                dmb_dt,
+                dmf_dt,
+                dml_dt,
+                dd_p_dt,
+                dt_o_dt,
+                dt_d_dt,
+                dc_o_dt,
+                dv_o_dt,
+                dw_dt,
+                dG_dt,
+                dt_dt,
+            ]
+        )
 
         return dx_dt
 
-    def sample_single_params(self, key: jax.random.PRNGKey,
-                             lower_bound: NamedTuple, upper_bound: NamedTuple):
+    def sample_single_params(
+        self, key: jax.random.PRNGKey, lower_bound: NamedTuple, upper_bound: NamedTuple
+    ):
         keys = self._split_key_like_tree(key)
-        return jtu.tree_map(lambda key, l, u: jax.random.uniform(key, shape=l.shape, minval=l, maxval=u),
-                            keys, lower_bound, upper_bound)
+        return jtu.tree_map(
+            lambda key, l, u: jax.random.uniform(
+                key, shape=l.shape, minval=l, maxval=u
+            ),
+            keys,
+            lower_bound,
+            upper_bound,
+        )
 
 
 class SpotDynamicsModel(DynamicsModel):
@@ -1173,7 +1516,9 @@ class SpotDynamicsModel(DynamicsModel):
         self.include_ee_orientation = include_ee_orientation
         self.x_dim = 12 if not self.include_ee_orientation else 12 + 6
         self.u_dim = 6 if not self.include_ee_orientation else 6 + 3
-        self.angle_idx = 2 if not self.include_ee_orientation else jnp.array([2, 12, 13, 14])
+        self.angle_idx = (
+            2 if not self.include_ee_orientation else jnp.array([2, 12, 13, 14])
+        )
         self.base_velocity_start_idx = 4 if self.encode_angle else 3
         super().__init__(
             dt=dt,
@@ -1279,7 +1624,18 @@ class SpotDynamicsModel(DynamicsModel):
                         ),
                     ]
                 )
-                gamma = jnp.concatenate([gamma, jnp.array([params.gamma_ee_ang_1, params.gamma_ee_ang_2, params.gamma_ee_ang_3])])
+                gamma = jnp.concatenate(
+                    [
+                        gamma,
+                        jnp.array(
+                            [
+                                params.gamma_ee_ang_1,
+                                params.gamma_ee_ang_2,
+                                params.gamma_ee_ang_3,
+                            ]
+                        ),
+                    ]
+                )
 
             # get updates
             dx = self.ode(carry, u, params)
@@ -1294,16 +1650,30 @@ class SpotDynamicsModel(DynamicsModel):
             if self.include_ee_orientation:
                 theta = next_state[..., self.angle_idx[0]]
                 sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-                next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
+                next_state = next_state.at[self.angle_idx].set(
+                    jnp.arctan2(sin_theta, cos_theta)
+                )
 
-                ee_rx, ee_ry, ee_rz = next_state[..., self.angle_idx[1]], next_state[..., self.angle_idx[2]], next_state[..., self.angle_idx[3]]
-                next_state = next_state.at[self.angle_idx[1]].set(jnp.arctan2(jnp.sin(ee_rx), jnp.cos(ee_rx)))
-                next_state = next_state.at[self.angle_idx[2]].set(jnp.arctan2(jnp.sin(ee_ry), jnp.cos(ee_ry)))
-                next_state = next_state.at[self.angle_idx[3]].set(jnp.arctan2(jnp.sin(ee_rz), jnp.cos(ee_rz)))
+                ee_rx, ee_ry, ee_rz = (
+                    next_state[..., self.angle_idx[1]],
+                    next_state[..., self.angle_idx[2]],
+                    next_state[..., self.angle_idx[3]],
+                )
+                next_state = next_state.at[self.angle_idx[1]].set(
+                    jnp.arctan2(jnp.sin(ee_rx), jnp.cos(ee_rx))
+                )
+                next_state = next_state.at[self.angle_idx[2]].set(
+                    jnp.arctan2(jnp.sin(ee_ry), jnp.cos(ee_ry))
+                )
+                next_state = next_state.at[self.angle_idx[3]].set(
+                    jnp.arctan2(jnp.sin(ee_rz), jnp.cos(ee_rz))
+                )
             else:
                 theta = next_state[..., self.angle_idx]
                 sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-                next_state = next_state.at[self.angle_idx].set(jnp.arctan2(sin_theta, cos_theta))
+                next_state = next_state.at[self.angle_idx].set(
+                    jnp.arctan2(sin_theta, cos_theta)
+                )
         return next_state
 
     def next_step(self, x: jnp.array, u: jnp.array, params: SpotParams) -> jnp.array:
@@ -1317,11 +1687,19 @@ class SpotDynamicsModel(DynamicsModel):
 
     def reduce_x(self, x):
         if self.include_ee_orientation:
-            indices_in_encoded = [self.angle_idx[0], self.angle_idx[1] + 1, self.angle_idx[2] + 2, self.angle_idx[3] + 3]
-            theta = jnp.arctan2(x[..., indices_in_encoded[0]], x[..., indices_in_encoded[0] + 1])
-            ee_rx = jnp.arctan2(x[..., indices_in_encoded[1]], x[..., indices_in_encoded[1] + 1])
-            ee_ry = jnp.arctan2(x[..., indices_in_encoded[2]], x[..., indices_in_encoded[2] + 1])
-            ee_rz = jnp.arctan2(x[..., indices_in_encoded[3]], x[..., indices_in_encoded[3] + 1])
+            indices_in_encoded = [2, 12 + 1, 13 + 2, 14 + 3]
+            theta = jnp.arctan2(
+                x[..., indices_in_encoded[0]], x[..., indices_in_encoded[0] + 1]
+            )
+            ee_rx = jnp.arctan2(
+                x[..., indices_in_encoded[1]], x[..., indices_in_encoded[1] + 1]
+            )
+            ee_ry = jnp.arctan2(
+                x[..., indices_in_encoded[2]], x[..., indices_in_encoded[2] + 1]
+            )
+            ee_rz = jnp.arctan2(
+                x[..., indices_in_encoded[3]], x[..., indices_in_encoded[3] + 1]
+            )
             x_reduced = jnp.concatenate(
                 [
                     x[..., 0 : indices_in_encoded[0]],
@@ -1356,19 +1734,17 @@ class SpotDynamicsModel(DynamicsModel):
             ee_rz = jnp.atleast_1d(x[..., self.angle_idx[3]])
             x_expanded = jnp.concatenate(
                 [
-                    x[..., 0 : self.angle_idx[0]],
+                    x[..., 0:2],
                     jnp.sin(theta),
                     jnp.cos(theta),
-                    x[..., self.angle_idx[0] + 1 : self.angle_idx[1]],
+                    x[..., 3:12],
                     jnp.sin(ee_rx),
                     jnp.cos(ee_rx),
-                    x[..., self.angle_idx[1] + 1 : self.angle_idx[2]],
                     jnp.sin(ee_ry),
                     jnp.cos(ee_ry),
-                    x[..., self.angle_idx[2] + 1 : self.angle_idx[3]],
                     jnp.sin(ee_rz),
                     jnp.cos(ee_rz),
-                    x[..., self.angle_idx[3] + 1 :],
+                    x[..., 15:],
                 ],
                 axis=-1,
             )
@@ -1387,7 +1763,11 @@ class SpotDynamicsModel(DynamicsModel):
 
     def transform_input_to_global(self, x, u):
         # convert input to global frame
-        theta = x[..., self.angle_idx] if not self.include_ee_orientation else x[..., self.angle_idx[0]]
+        theta = (
+            x[..., self.angle_idx]
+            if not self.include_ee_orientation
+            else x[..., self.angle_idx[0]]
+        )
         cos_theta = jnp.cos(theta)
         sin_theta = jnp.sin(theta)
         u_global = jnp.zeros_like(u)
@@ -1460,7 +1840,7 @@ class SpotDynamicsModel(DynamicsModel):
             + base_vy
         )
         ee_vz = params.alpha_ee_3 * x[..., 11] + (1 - params.alpha_ee_3) * u[..., 5]
-        
+
         # positions dx
         base_x_dot = base_vx
         base_y_dot = base_vy
@@ -1480,10 +1860,19 @@ class SpotDynamicsModel(DynamicsModel):
         # handle ee orientation
         if self.include_ee_orientation:
             # new velocities
-            ee_vrx = params.alpha_ee_ang_1 * x[..., 15] + (1 - params.alpha_ee_ang_1) * u[..., 6]
-            ee_vry = params.alpha_ee_ang_2 * x[..., 16] + (1 - params.alpha_ee_ang_2) * u[..., 7]
-            ee_vrz = params.alpha_ee_ang_3 * x[..., 17] + (1 - params.alpha_ee_ang_3) * u[..., 8]
-            
+            ee_vrx = (
+                params.alpha_ee_ang_1 * x[..., 15]
+                + (1 - params.alpha_ee_ang_1) * u[..., 6]
+            )
+            ee_vry = (
+                params.alpha_ee_ang_2 * x[..., 16]
+                + (1 - params.alpha_ee_ang_2) * u[..., 7]
+            )
+            ee_vrz = (
+                params.alpha_ee_ang_3 * x[..., 17]
+                + (1 - params.alpha_ee_ang_3) * u[..., 8]
+            )
+
             # positions dx
             ee_rx_dot = ee_vrx
             ee_ry_dot = ee_vry
@@ -1541,28 +1930,50 @@ if __name__ == "__main__":
     dim_x, dim_y = 10, 10
     sim = SergioDynamics(0.1, dim_x, dim_y)
     x_next = sim.next_step(x=jnp.ones(dim_x * dim_y), params=sim.params)
-    lower_bound = SergioParams(lam=jnp.array(0.2),
-                               contribution_rates=jnp.array(1.0),
-                               basal_rates=jnp.array(1.0),
-                               graph=jnp.array(0))
-    upper_bound = SergioParams(lam=jnp.array(0.9),
-                               contribution_rates=jnp.array(5.0),
-                               basal_rates=jnp.array(5.0),
-                               graph=jnp.array(2))
+    lower_bound = SergioParams(
+        lam=jnp.array(0.2),
+        contribution_rates=jnp.array(1.0),
+        basal_rates=jnp.array(1.0),
+        graph=jnp.array(0),
+    )
+    upper_bound = SergioParams(
+        lam=jnp.array(0.9),
+        contribution_rates=jnp.array(5.0),
+        basal_rates=jnp.array(5.0),
+        graph=jnp.array(2),
+    )
     key = jax.random.PRNGKey(0)
     keys = random.split(key, 4)
-    params = vmap(sim.sample_params_uniform, in_axes=(0, None, None, None))(keys, 1, lower_bound, upper_bound)
-    x_next = vmap(vmap(lambda p: sim.next_step(x=jnp.ones(dim_x * dim_y), params=p)))(params)
+    params = vmap(sim.sample_params_uniform, in_axes=(0, None, None, None))(
+        keys, 1, lower_bound, upper_bound
+    )
+    x_next = vmap(vmap(lambda p: sim.next_step(x=jnp.ones(dim_x * dim_y), params=p)))(
+        params
+    )
     pendulum = Pendulum(0.1)
-    pendulum.next_step(x=jnp.array([0., 0., 0.]), u=jnp.array([1.0]), params=pendulum.params)
+    pendulum.next_step(
+        x=jnp.array([0.0, 0.0, 0.0]), u=jnp.array([1.0]), params=pendulum.params
+    )
 
-    upper_bound = PendulumParams(m=jnp.array(1.0), l=jnp.array(1.0), g=jnp.array(10.0), nu=jnp.array(1.0),
-                                 c_d=jnp.array(1.0))
-    lower_bound = PendulumParams(m=jnp.array(0.1), l=jnp.array(0.1), g=jnp.array(9.0), nu=jnp.array(0.1),
-                                 c_d=jnp.array(0.1))
+    upper_bound = PendulumParams(
+        m=jnp.array(1.0),
+        l=jnp.array(1.0),
+        g=jnp.array(10.0),
+        nu=jnp.array(1.0),
+        c_d=jnp.array(1.0),
+    )
+    lower_bound = PendulumParams(
+        m=jnp.array(0.1),
+        l=jnp.array(0.1),
+        g=jnp.array(9.0),
+        nu=jnp.array(0.1),
+        c_d=jnp.array(0.1),
+    )
     key = jax.random.PRNGKey(0)
     keys = random.split(key, 4)
-    params = vmap(pendulum.sample_params_uniform, in_axes=(0, None, None, None))(keys, 1, lower_bound, upper_bound)
+    params = vmap(pendulum.sample_params_uniform, in_axes=(0, None, None, None))(
+        keys, 1, lower_bound, upper_bound
+    )
 
     def simulate_car(init_pos=jnp.zeros(2), horizon=150):
         dt = 0.1
@@ -1572,6 +1983,7 @@ if __name__ == "__main__":
         x_traj = jnp.zeros([horizon, 2])
         x = x.at[0:2].set(init_pos)
         import matplotlib.pyplot as plt
+
         fig = plt.figure()
         ax = fig.add_subplot(111)
         for h in range(horizon):
@@ -1581,7 +1993,7 @@ if __name__ == "__main__":
             x = car.next_step(x, u, params)
             x_traj = x_traj.at[h, ...].set(x[0:2])
 
-        ax.plot(x_traj[:, 0], x_traj[:, 1], label='Car Trajectory w/o blend')
+        ax.plot(x_traj[:, 0], x_traj[:, 1], label="Car Trajectory w/o blend")
 
         params = CarParams(use_blend=1.0)
         x = jnp.zeros(6)
@@ -1594,18 +2006,17 @@ if __name__ == "__main__":
             x = car.next_step(x, u, params)
             x_traj = x_traj.at[h, ...].set(x[0:2])
 
-        ax.plot(x_traj[:, 0], x_traj[:, 1], label='Car Trajectory with blend')
+        ax.plot(x_traj[:, 0], x_traj[:, 1], label="Car Trajectory with blend")
         # plt.scatter(env._goal[0], env._goal[1], color='red', label='goal')
         plt.legend()
-        plt.xlabel('x-distance in [m]')
-        plt.ylabel('y-distance in [m]')
+        plt.xlabel("x-distance in [m]")
+        plt.ylabel("y-distance in [m]")
         plt.title("Simulation of Car for " + str(int(horizon)))
         plt.show()
 
-
     # simulate_car()
 
-     # Test function for the SpotDynamicsModel with include_ee_orientation = True
+    # Test function for the SpotDynamicsModel with include_ee_orientation = True
     def test_spot_dynamics_model_with_ee_orientation_trajectory():
         # Create an instance of the model with include_ee_orientation=True
         dt = 0.1  # Time step
@@ -1613,19 +2024,19 @@ if __name__ == "__main__":
             dt=dt,
             encode_angle=False,
             input_in_local_frame=True,
-            include_ee_orientation=True
+            include_ee_orientation=True,
         )
 
         # Define initial state x0
         x0 = jnp.zeros(model.x_dim)
-        x0 = x0.at[0].set(0.0)    # Base x position
-        x0 = x0.at[1].set(0.0)    # Base y position
-        x0 = x0.at[2].set(0.0)    # Base orientation angle theta
+        x0 = x0.at[0].set(0.0)  # Base x position
+        x0 = x0.at[1].set(0.0)  # Base y position
+        x0 = x0.at[2].set(0.0)  # Base orientation angle theta
         x0 = x0.at[3:6].set(0.0)  # Base velocities
         x0 = x0.at[6:9].set(0.0)  # End-effector positions
-        x0 = x0.at[9:12].set(0.0) # End-effector velocities
-        x0 = x0.at[12:15].set(0.0) # End-effector orientations
-        x0 = x0.at[15:18].set(0.0) # End-effector angular velocities
+        x0 = x0.at[9:12].set(0.0)  # End-effector velocities
+        x0 = x0.at[12:15].set(0.0)  # End-effector orientations
+        x0 = x0.at[15:18].set(0.0)  # End-effector angular velocities
 
         # Define control inputs over time
         T = 200  # Number of time steps
@@ -1640,7 +2051,6 @@ if __name__ == "__main__":
         u = u.at[:, 6].set(10)  # End-effector angular velocity in x
         u = u.at[:, 7].set(0.0)  # End-effector angular velocity in y
         u = u.at[:, 8].set(0.0)  # End-effector angular velocity in z
-
 
         # Use default parameters
         params = SpotParams()
@@ -1662,35 +2072,42 @@ if __name__ == "__main__":
 
         # Plot the base trajectory
         import matplotlib.pyplot as plt
+
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
-        plt.plot(base_positions[:, 0], base_positions[:, 1], 'b.-', label='Base')
-        plt.xlabel('Base X Position')
-        plt.ylabel('Base Y Position')
-        plt.title('Base Trajectory')
+        plt.plot(base_positions[:, 0], base_positions[:, 1], "b.-", label="Base")
+        plt.xlabel("Base X Position")
+        plt.ylabel("Base Y Position")
+        plt.title("Base Trajectory")
         plt.legend()
         plt.grid(True)
 
         # Plot the end-effector trajectory
         plt.subplot(1, 2, 2)
-        plt.plot(ee_positions[:, 0], ee_positions[:, 1], 'r.-', label='End-Effector')
-        plt.xlabel('EE X Position')
-        plt.ylabel('EE Y Position')
-        plt.title('End-Effector Trajectory')
+        plt.plot(ee_positions[:, 0], ee_positions[:, 1], "r.-", label="End-Effector")
+        plt.xlabel("EE X Position")
+        plt.ylabel("EE Y Position")
+        plt.title("End-Effector Trajectory")
         plt.legend()
         plt.grid(True)
 
         plt.tight_layout()
-        plt.savefig('spot_dynamics_model_with_ee_orientation_trajectory.png')
+        plt.savefig("spot_dynamics_model_with_ee_orientation_trajectory.png")
         # Plot the end-effector position with orientation as arrows in 3D
         from mpl_toolkits.mplot3d import Axes3D
         from scipy.spatial.transform import Rotation as R
 
         fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
+        ax = fig.add_subplot(111, projection="3d")
 
         # Plot the end-effector positions
-        ax.plot(ee_positions[:, 0], ee_positions[:, 1], ee_positions[:, 2], 'r.-', label='End-Effector')
+        ax.plot(
+            ee_positions[:, 0],
+            ee_positions[:, 1],
+            ee_positions[:, 2],
+            "r.-",
+            label="End-Effector",
+        )
 
         # Define the number of orientation arrows to plot (e.g., 10 evenly spaced points)
         num_arrows = 10
@@ -1702,26 +2119,30 @@ if __name__ == "__main__":
             orientation = ee_orientations[idx]
 
             # Convert orientation angles (rx, ry, rz) to a rotation matrix
-            rotation = R.from_euler('xyz', orientation)
+            rotation = R.from_euler("xyz", orientation)
 
             # Assume the forward direction vector is along the x-axis in the local frame
             forward_vector = rotation.apply([1, 0, 0])
 
             # Plot the orientation arrow
             ax.quiver(
-                position[0], position[1], position[2],          # Starting point of the arrow
-                forward_vector[0], forward_vector[1], forward_vector[2],  # Direction components
-                length=0.1, normalize=True, color='k'
+                position[0],
+                position[1],
+                position[2],  # Starting point of the arrow
+                forward_vector[0],
+                forward_vector[1],
+                forward_vector[2],  # Direction components
+                length=0.1,
+                normalize=True,
+                color="k",
             )
 
-        ax.set_xlabel('EE X Position')
-        ax.set_ylabel('EE Y Position')
-        ax.set_zlabel('EE Z Position')
-        ax.set_title('End-Effector Trajectory with Orientation')
+        ax.set_xlabel("EE X Position")
+        ax.set_ylabel("EE Y Position")
+        ax.set_zlabel("EE Z Position")
+        ax.set_title("End-Effector Trajectory with Orientation")
         ax.legend()
-        plt.savefig('spot_dynamics_model_with_ee_orientation_trajectory_3d.png')
-
-
+        plt.savefig("spot_dynamics_model_with_ee_orientation_trajectory_3d.png")
 
     # Run the test function
     test_spot_dynamics_model_with_ee_orientation_trajectory()

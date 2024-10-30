@@ -37,7 +37,7 @@ class SpotDynamicsParams:
 
 class SpotDynamics(Dynamics[SpotDynamicsParams]):
     max_steps: int = 200
-    _dt: float = 1 / 10.0
+    _dt: float = 1 / 15.0
     _include_ee_orientation: bool = True
     _domain_lower = SpotSim._domain_lower
     _domain_upper = SpotSim._domain_upper
@@ -502,7 +502,7 @@ if __name__ == "__main__":
     rewards = []
     actions = []
     for i in range(120):
-        t = i / 10.0
+        t = i / 15.0
         a = jnp.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
         next_sys_step = system.step(s, a, system_params)
         s = next_sys_step.x_next
@@ -519,4 +519,4 @@ if __name__ == "__main__":
 
     print(traj.shape)
 
-    plot_spot_trajectory(traj, actions, encode_angle=ENCODE_ANGLE)
+    plot_spot_trajectory(traj, actions)

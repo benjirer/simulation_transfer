@@ -342,7 +342,7 @@ def regression_experiment(
 
             spot_params = SpotParams(**SPOT_DEFAULT_PARAMS)
             model = SpotDynamicsModel(
-                dt=1 / 10.0,
+                dt=1 / 15.0,
                 encode_angle=False,
             )
 

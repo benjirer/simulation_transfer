@@ -20,7 +20,7 @@ from sim_transfer.sims.simulators import SpotSim
 def simulate_spot(
     file_path,
     spot_models: Dict[str, SpotParams],
-    dt=1.0 / 10.0,
+    dt=1.0 / 15.0,
     horizon=None,
     show_plot=True,
     save_path=None,
@@ -372,7 +372,7 @@ def simulate_spot_range(
     param: str = "alpha",
     range: Tuple[float, float] = (0.0, 1.0),
     steps: float = 0.1,
-    dt=1.0 / 10.0,
+    dt=1.0 / 15.0,
     horizon=None,
     show_plot=True,
     save_path=None,

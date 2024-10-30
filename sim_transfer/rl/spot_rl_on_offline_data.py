@@ -55,6 +55,7 @@ class RLFromOfflineData:
         train_sac_only_from_init_states: bool = False,
         predict_difference: bool = True,
         wandb_logging: bool = True,
+        include_ee_orientation: bool = False,
         # parameters model
         bnn_model: BatchedNeuralNetworkModel = None,
         include_aleatoric_noise: bool = True,
@@ -77,6 +78,7 @@ class RLFromOfflineData:
             None  # setting none forces use of default params
         )
         self.predict_difference = predict_difference
+        self.include_ee_orientation = include_ee_orientation
 
         # set parameters model
         self.load_pretrained_bnn_model = load_pretrained_bnn_model
@@ -116,9 +118,9 @@ class RLFromOfflineData:
         # set dimensions
         # note: raw x is built as [robot state (12/13), ee goal (3), frame stacked actions (n*6), current action (6)] = 12/13 + 3 + n*6 + 6 = 21/22 + n*6
         # note: raw y is built as [next robot state (12/13), ee goal (3)] = 12/13 + 3 = 15/16
-        self.state_dim = 13
-        self.action_dim = 6
-        self.goal_dim = 3
+        self.state_dim = 13 if not self.include_ee_orientation else 22
+        self.action_dim = 6 if not self.include_ee_orientation else 9
+        self.goal_dim = 3 if not self.include_ee_orientation else 6
         self.state_dim_with_goal = self.state_dim + self.goal_dim
 
         # account for frame stacking (augmenting state with actions)
@@ -139,7 +141,9 @@ class RLFromOfflineData:
         ]
 
         if self.num_frame_stack > 0:
-            next_framestacked_actions = x_train[:, self.state_dim_with_goal + self.action_dim :]
+            next_framestacked_actions = x_train[
+                :, self.state_dim_with_goal + self.action_dim :
+            ]
         else:
             next_framestacked_actions = framestacked_actions
 
@@ -531,7 +535,7 @@ class RLFromOfflineData:
         # get data
         data_source: str = "spot_real"
         data_spec: dict = {
-            "num_samples_train": 5_400,
+            "num_samples_train": 4_000,
             "num_stacked_actions": self.num_frame_stack,
         }
         x_data, y_data, _, _, sim = provide_data_and_sim(
@@ -625,7 +629,7 @@ class RLFromOfflineData:
             actions_buffer = jnp.zeros(shape=(self.action_dim * self.num_frame_stack))
             sim = SpotSimEnv(
                 encode_angle=True,
-                action_delay=1 / 10.0 * self.num_frame_stack,
+                action_delay=1 / 15.0 * self.num_frame_stack,
                 margin_factor=self.spot_reward_kwargs["margin_factor"],
                 ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
                 ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
@@ -684,32 +688,46 @@ class RLFromOfflineData:
         # plot trajectory evaluation
         fig_eval, _ = plot_spot_trajectory(
             trajectories,
-            encode_angle=True,
-            state_dim=13,
             plot_mode="transitions_eval_full",
+            include_ee_orientation=self.include_ee_orientation,
         )
 
         # plot trajectory ee-goal distance
         fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
             trajectories,
-            encode_angle=True,
-            state_dim=13,
             plot_mode="transitions_distance_eval",
+            include_ee_orientation=self.include_ee_orientation,
         )
 
         if self.wandb_logging:
             model_name = "default_sim_model"
-            wandb.log(
-                {
-                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
-                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                    f"mean_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps
-                    ),
-                    f"reward_mean_on_{model_name}": float(reward_mean),
-                    f"reward_std_on_{model_name}": float(reward_std),
-                }
-            )
+            if not self.include_ee_orientation:
+                wandb.log(
+                    {
+                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                        f"mean_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps
+                        ),
+                        f"reward_mean_on_{model_name}": float(reward_mean),
+                        f"reward_std_on_{model_name}": float(reward_std),
+                    }
+                )
+            else:
+                wandb.log(
+                    {
+                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                        f"mean_pos_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps[0]
+                        ),
+                        f"mean_orient_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps[1]
+                        ),
+                        f"reward_mean_on_{model_name}": float(reward_mean),
+                        f"reward_std_on_{model_name}": float(reward_std),
+                    }
+                )
             plt.close("all")
 
         # save trajectories
@@ -818,30 +836,45 @@ class RLFromOfflineData:
         # plot trajectory evaluation
         fig, axes = plot_spot_trajectory(
             trajectories,
-            encode_angle=True,
-            state_dim=13,
             plot_mode="transitions_eval_full",
+            include_ee_orientation=self.include_ee_orientation,
         )
 
         # plot trajectory ee-goal distance
         fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
             trajectories,
-            encode_angle=True,
-            state_dim=13,
             plot_mode="transitions_distance_eval",
+            include_ee_orientation=self.include_ee_orientation,
         )
 
-        wandb.log(
-            {
-                f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
-                f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                f"mean_error_after_10_steps_on_{model_name}": float(
-                    mean_error_after_10_steps
-                ),
-                f"reward_mean_on_{model_name}": float(reward_mean),
-                f"reward_std_on_{model_name}": float(reward_std),
-            }
-        )
+        if self.wandb_logging:
+            if not self.include_ee_orientation:
+                wandb.log(
+                    {
+                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
+                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                        f"mean_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps
+                        ),
+                        f"reward_mean_on_{model_name}": float(reward_mean),
+                        f"reward_std_on_{model_name}": float(reward_std),
+                    }
+                )
+            else:
+                wandb.log(
+                    {
+                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
+                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                        f"mean_pos_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps[0]
+                        ),
+                        f"mean_orient_error_after_10_steps_on_{model_name}": float(
+                            mean_error_after_10_steps[1]
+                        ),
+                        f"reward_mean_on_{model_name}": float(reward_mean),
+                        f"reward_std_on_{model_name}": float(reward_std),
+                    }
+                )
         plt.close("all")
 
         # save trajectories
@@ -870,16 +903,26 @@ class RLFromOfflineData:
     ):
         """Evaluate model on the dedicated set of data."""
 
+        DATA_DIR = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
+            "data"
+        )
+
         # load measured data for testing and eval
         if use_all_data:
-            dir_path = (
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v0",
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v1",
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v2",
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v3",
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/recordings_spot_v4",
-                "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/test_data_spot",
-            )
+            if self.include_ee_orientation:
+                dir_path = (
+                    os.path.join(DATA_DIR, "test_data_spot_new"),
+                )
+            else:
+                dir_path = (
+                    os.path.join(DATA_DIR, "recordings_spot_v0"),
+                    os.path.join(DATA_DIR, "recordings_spot_v1"),
+                    os.path.join(DATA_DIR, "recordings_spot_v2"),
+                    os.path.join(DATA_DIR, "recordings_spot_v3"),
+                    os.path.join(DATA_DIR, "recordings_spot_v4"),
+                    os.path.join(DATA_DIR, "test_data_spot"),
+                )
             eval_trajectories_paths = sorted(
                 [
                     os.path.join(dir_path, f)
@@ -889,7 +932,11 @@ class RLFromOfflineData:
                 ]
             )
         else:
-            dir_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/data/test_data_spot"
+            dir_path = (
+                os.path.join(DATA_DIR, "test_data_spot")
+                if not self.include_ee_orientation
+                else os.path.join(DATA_DIR, "test_data_spot_new")
+            )
             eval_trajectories_paths = sorted(
                 [
                     os.path.join(dir_path, f)
@@ -905,27 +952,65 @@ class RLFromOfflineData:
         action_delay_base = 0
         action_delay_ee = 0
         step_range = min(200, min([traj[0].shape[0] for traj in eval_trajectories]))
-        state_labels = [
-            "base_x",
-            "base_y",
-            "base_theta",
-            "base_vel_x",
-            "base_vel_y",
-            "base_ang_vel",
-            "ee_x",
-            "ee_y",
-            "ee_z",
-            "ee_vx",
-            "ee_vy",
-            "ee_vz",
-        ]
+        
+        if self.include_ee_orientation:
+            state_labels = [
+                "base_x",
+                "base_y",
+                "base_theta",
+                "base_vel_x",
+                "base_vel_y",
+                "base_ang_vel",
+                "ee_x",
+                "ee_y",
+                "ee_z",
+                "ee_vx",
+                "ee_vy",
+                "ee_vz",
+                "ee_rx",
+                "ee_ry",
+                "ee_rz",
+                "ee_rvx",
+                "ee_rvy",
+                "ee_rvz",
+            ]
+        else:
+            state_labels = [
+                "base_x",
+                "base_y",
+                "base_theta",
+                "base_vel_x",
+                "base_vel_y",
+                "base_ang_vel",
+                "ee_x",
+                "ee_y",
+                "ee_z",
+                "ee_vx",
+                "ee_vy",
+                "ee_vz",
+            ]
 
         # setup extra eval metrics (rmse over all trajectories)
         extra_eval_metrics = {}
 
         # iterate over eval trajectories
         for traj, traj_id in zip(eval_trajectories, eval_trajectories_id):
-            testing_x_pre_org, testing_u_pre_org, testing_y_org = traj
+            if self.include_ee_orientation:
+                testing_x_pre_org = traj.observation
+                testing_u_pre_org = traj.action
+                testing_y_org = traj.next_observation
+                
+                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 2)
+                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 12)
+                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 13)
+                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 14)
+
+                testing_y_org = decode_angles_fn(y_pred_testing, 2)
+                testing_y_org = decode_angles_fn(y_pred_testing, 12)
+                testing_y_org = decode_angles_fn(y_pred_testing, 13)
+                testing_y_org = decode_angles_fn(y_pred_testing, 14)
+            else:
+                testing_x_pre_org, testing_u_pre_org, testing_y_org = traj
 
             # cut data
             testing_x_pre = testing_x_pre_org[:step_range]
@@ -938,10 +1023,19 @@ class RLFromOfflineData:
                 num_stacked_actions=self.num_frame_stack,
                 action_delay_base=action_delay_base,
                 action_delay_ee=action_delay_ee,
+                action_dim_ee=6 if self.include_ee_orientation else 3,
             )
 
             # prepare data
-            testing_x_pre = encode_angles_fn(testing_x_pre, 2)
+            if self.include_ee_orientation:
+                indices_in_encoded = [2, 13, 15, 17]
+                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[0])
+                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[1])
+                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[2])
+                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[3])
+            else:
+                testing_x_pre = encode_angles_fn(testing_x_pre, 2)
+
             testing_x = jnp.concatenate([testing_x_pre, testing_u_pre], axis=1)
 
             # prepare error metrics
@@ -951,6 +1045,9 @@ class RLFromOfflineData:
             model_errors_total_base = {}
             model_errors_max_base_theta = {}
             model_errors_total_base_theta = {}
+            if self.include_ee_orientation:
+                model_errors_max_ee_orient = {}
+                model_errors_total_ee_orient = {}                
 
             # simulate trajectory with learned model
             assert (spot_learned_params is None) != (
@@ -995,7 +1092,13 @@ class RLFromOfflineData:
                     "Either spot_learned_params or bnn_model has to be provided."
                 )
 
-            y_pred_testing = decode_angles_fn(y_pred_testing, 2)
+            if self.include_ee_orientation:
+                y_pred_testing = decode_angles_fn(y_pred_testing, 2)
+                y_pred_testing = decode_angles_fn(y_pred_testing, 12)
+                y_pred_testing = decode_angles_fn(y_pred_testing, 13)
+                y_pred_testing = decode_angles_fn(y_pred_testing, 14)
+            else:
+                y_pred_testing = decode_angles_fn(y_pred_testing, 2)
 
             # calculate errors for plotting
             ee_pos_error_running = jnp.linalg.norm(
@@ -1024,6 +1127,16 @@ class RLFromOfflineData:
             base_theta_error_total = jnp.sum(base_theta_error_running)
             model_errors_max_base_theta[model_name] = base_theta_error_max
             model_errors_total_base_theta[model_name] = base_theta_error_total
+
+            if self.include_ee_orientation:
+                ee_orient_error_running = jnp.linalg.norm(
+                    y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
+                )
+                ee_orient_error_cumulative = jnp.cumsum(ee_orient_error_running)
+                ee_orient_error_max = jnp.max(ee_orient_error_running)
+                ee_orient_error_total = jnp.sum(ee_orient_error_running)
+                model_errors_max_ee_orient[model_name] = ee_orient_error_max
+                model_errors_total_ee_orient[model_name] = ee_orient_error_total
 
             # fill extra evals metrics for current trajectory
             for state_label in state_labels:
@@ -1060,12 +1173,30 @@ class RLFromOfflineData:
                 extra_eval_metrics.get("ee_pos_rmse", jnp.zeros(ee_pos_error.shape))
                 + ee_pos_error
             )
+            if self.include_ee_orientation:
+                ee_orient_error = (
+                    jnp.linalg.norm(
+                        y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
+                    )
+                    ** 2
+                )
+                extra_eval_metrics["ee_orient_rmse"] = (
+                    extra_eval_metrics.get(
+                        "ee_orient_rmse", jnp.zeros(ee_orient_error.shape)
+                    )
+                    + ee_orient_error
+                )
 
             # detailed plot of trajectory rollout and errors
             # prepare plots
-            fig, axs = plt.subplots(6, 2, figsize=(30, 15))
-            fig_ee_error, axs_ee_error = plt.subplots(4, 1, figsize=(30, 15))
-            fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
+            if self.include_ee_orientation:
+                fig, axs = plt.subplots(6, 3, figsize=(30, 15))
+                fig_ee_error, axs_ee_error = plt.subplots(8, 1, figsize=(30, 15))
+                fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
+            else:
+                fig, axs = plt.subplots(6, 2, figsize=(30, 15))
+                fig_ee_error, axs_ee_error = plt.subplots(4, 1, figsize=(30, 15))
+                fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
 
             # plot true data
             for i in range(6):
@@ -1075,6 +1206,11 @@ class RLFromOfflineData:
                 if i + 6 < testing_y.shape[-1]:
                     axs[i, 1].plot(testing_y[:, i + 6], label="true")
                     axs[i, 1].set_title(state_labels[i + 6])
+                
+                if self.include_ee_orientation:
+                    if i + 12 < testing_y.shape[-1]:
+                        axs[i, 2].plot(testing_y[:, i + 12], label="true")
+                        axs[i, 2].set_title(state_labels[i + 12])
 
             # prepare error plots
             axs_ee_error[0].set_title("Running ee position error")
@@ -1089,6 +1225,11 @@ class RLFromOfflineData:
             axs_base_error[1, 1].set_title("Running cumulative base theta error")
             axs_base_error[2, 1].set_title("Max base theta error")
             axs_base_error[3, 1].set_title("Total cumulative base theta error")
+            if self.include_ee_orientation:
+                axs_ee_error[4].set_title("Running ee orientation error")
+                axs_ee_error[5].set_title("Running cumulative ee orientation error")
+                axs_ee_error[6].set_title("Max ee orientation error")
+                axs_ee_error[7].set_title("Total cumulative ee orientation error")
 
             # plot simulated trajectory
             for i in range(6):
@@ -1102,6 +1243,14 @@ class RLFromOfflineData:
                         label=f"pred {model_name}",
                         linestyle="--",
                     )
+                
+                if self.include_ee_orientation:
+                    if i + 12 < testing_y.shape[-1]:
+                        axs[i, 2].plot(
+                            y_pred_testing[:, i + 12],
+                            label=f"pred {model_name}",
+                            linestyle="--",
+                        )
 
             # plot running and cumulative errors
             axs_ee_error[0].plot(ee_pos_error_running, label=f"{model_name}")
@@ -1114,6 +1263,10 @@ class RLFromOfflineData:
             axs_base_error[1, 1].plot(
                 base_theta_error_cumulative, label=f"{model_name}"
             )
+
+            if self.include_ee_orientation:
+                axs_ee_error[4].plot(ee_orient_error_running, label=f"{model_name}")
+                axs_ee_error[5].plot(ee_orient_error_cumulative, label=f"{model_name}")
 
             # plot max and total errors
             axs_ee_error[2].barh(
@@ -1138,14 +1291,28 @@ class RLFromOfflineData:
                 list(model_errors_total_base_theta.values()),
             )
 
+            if self.include_ee_orientation:
+                axs_ee_error[6].barh(
+                    list(model_errors_max_ee_orient.keys()),
+                    list(model_errors_max_ee_orient.values()),
+                )
+                axs_ee_error[7].barh(
+                    list(model_errors_total_ee_orient.keys()),
+                    list(model_errors_total_ee_orient.values()),
+                )
+
             for i in range(6):
                 axs[i, 0].legend(fontsize=8)
                 axs[i, 1].legend(fontsize=8)
+                if self.include_ee_orientation:
+                    axs[i, 2].legend(fontsize=8)
 
             for i in range(4):
                 axs_ee_error[i].legend(fontsize=8)
                 axs_base_error[i, 0].legend(fontsize=8)
                 axs_base_error[i, 1].legend(fontsize=8)
+                if self.include_ee_orientation:
+                    axs_ee_error[i + 4].legend(fontsize=8)
 
             if self.wandb_logging:
                 wandb.log(
@@ -1176,6 +1343,11 @@ class RLFromOfflineData:
             extra_eval_metrics["ee_pos_rmse"] / len(eval_trajectories)
         )
 
+        if self.include_ee_orientation:
+            extra_eval_metrics["ee_orient_rmse"] = jnp.sqrt(
+                extra_eval_metrics["ee_orient_rmse"] / len(eval_trajectories)
+            )
+
         # log extra eval metrics
         if self.wandb_logging:
             for step in range(step_range):
@@ -1199,6 +1371,14 @@ class RLFromOfflineData:
                         "sys_id_extra_eval/step": step,
                     }
                 )
+                if self.include_ee_orientation:
+                    step_extra_eval_metrics.update(
+                        {
+                            "sys_id_extra_eval/ee_orient_rmse": float(
+                                extra_eval_metrics["ee_orient_rmse"][step]
+                            )
+                        }
+                    )
                 wandb.log(step_extra_eval_metrics)
 
 

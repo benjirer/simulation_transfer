@@ -10,9 +10,9 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     random.seed(0)
     # random_seed = random.sample(range(1, 1_000_000), 3)
     random_seed = [42, 9126, 1913244]
-    # random_seed = [42]
+    random_seed = [42]
     num_offline_collected_transitions = [800, 2000, 5000]
-    # num_offline_collected_transitions = [5000]
+    num_offline_collected_transitions = [4000]
 
     parameters = {
         # parameters general
@@ -21,9 +21,10 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "num_offline_collected_transitions": num_offline_collected_transitions,
         "test_data_ratio": [0.15],
         "wandb_logging": [True],
-        "project_name": ["policy_testing_full_v9"],
+        "project_name": ["ee_ori_testing"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
+        "include_ee_orientation": [True],
     }
 
     parameters_rl = {
@@ -33,7 +34,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "best_policy": [1],
         "margin_factor": [10.0],
         "ctrl_cost_weight": [0.05],
-        "ctrl_diff_weight": [0.3, 0.4],
+        "ctrl_diff_weight": [0.3],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [1],
         "eval_on_all_offline_data": [1],
@@ -53,7 +54,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "likelihood_exponent": [1.0],
         "bandwidth_svgd": [5.0],
         "num_epochs": [70],
-        "max_train_steps": [150_000],
+        "max_train_steps": [10_000],
         "min_train_steps": [10_000],
         "num_sim_fitting_steps": [40_000],
         "length_scale_aditive_sim_gp": [1.0],
@@ -98,8 +99,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
 if __name__ == "__main__":
     """Experiment settings"""
-    models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
-    # models = ["bnn-sim-fsvgd"]
+    # models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
+    models = ["bnn-sim-fsvgd"]
     mode = "local"
     num_cpus = 1
     num_gpus = 1
@@ -107,3 +108,4 @@ if __name__ == "__main__":
 
     for model in models:
         main(model, mode, num_cpus, num_gpus, mem)
+ 
