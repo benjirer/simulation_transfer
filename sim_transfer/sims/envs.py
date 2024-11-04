@@ -421,6 +421,8 @@ class SpotEnvReward:
         else:
             total_dist = ee_pos_dist
         
+        total_dist = ee_pos_dist
+        
         reward = self.tolerance_reward(total_dist)
         return reward
     

@@ -951,7 +951,7 @@ class RLFromOfflineData:
         # extra evaluation settings
         action_delay_base = 0
         action_delay_ee = 0
-        step_range = min(200, min([traj[0].shape[0] for traj in eval_trajectories]))
+        step_range = 200
         
         if self.include_ee_orientation:
             state_labels = [
@@ -996,19 +996,20 @@ class RLFromOfflineData:
         # iterate over eval trajectories
         for traj, traj_id in zip(eval_trajectories, eval_trajectories_id):
             if self.include_ee_orientation:
-                testing_x_pre_org = traj.observation
-                testing_u_pre_org = traj.action
-                testing_y_org = traj.next_observation
+
+                testing_x_pre_org = jnp.array([t.observation for t in traj])
+                testing_u_pre_org = jnp.array([t.action for t in traj])
+                testing_y_org = jnp.array([t.next_observation for t in traj])
                 
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 2)
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 12)
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 13)
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 14)
 
-                testing_y_org = decode_angles_fn(y_pred_testing, 2)
-                testing_y_org = decode_angles_fn(y_pred_testing, 12)
-                testing_y_org = decode_angles_fn(y_pred_testing, 13)
-                testing_y_org = decode_angles_fn(y_pred_testing, 14)
+                testing_y_org = decode_angles_fn(testing_y_org, 2)
+                testing_y_org = decode_angles_fn(testing_y_org, 12)
+                testing_y_org = decode_angles_fn(testing_y_org, 13)
+                testing_y_org = decode_angles_fn(testing_y_org, 14)
             else:
                 testing_x_pre_org, testing_u_pre_org, testing_y_org = traj
 
