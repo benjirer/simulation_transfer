@@ -1509,7 +1509,7 @@ class SpotDynamicsModel(DynamicsModel):
         dt,
         encode_angle: bool = True,
         input_in_local_frame: bool = True,
-        include_ee_orientation: bool = False,
+        include_ee_orientation: bool = True,
     ):
         self.encode_angle = encode_angle
         self.input_in_local_frame = input_in_local_frame
@@ -1519,7 +1519,6 @@ class SpotDynamicsModel(DynamicsModel):
         self.angle_idx = (
             2 if not self.include_ee_orientation else jnp.array([2, 12, 13, 14])
         )
-        self.base_velocity_start_idx = 4 if self.encode_angle else 3
         super().__init__(
             dt=dt,
             x_dim=self.x_dim,
@@ -1648,25 +1647,27 @@ class SpotDynamicsModel(DynamicsModel):
         if self.angle_idx is not None:
             # cast angle to [-pi, pi]
             if self.include_ee_orientation:
-                theta = next_state[..., self.angle_idx[0]]
-                sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-                next_state = next_state.at[self.angle_idx].set(
-                    jnp.arctan2(sin_theta, cos_theta)
-                )
-
-                ee_rx, ee_ry, ee_rz = (
+                theta, ee_rx, ee_ry, ee_rz = (
+                    next_state[..., self.angle_idx[0]],
                     next_state[..., self.angle_idx[1]],
                     next_state[..., self.angle_idx[2]],
                     next_state[..., self.angle_idx[3]],
                 )
+                sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
+                sin_ee_rx, cos_ee_rx = jnp.sin(ee_rx), jnp.cos(ee_rx)
+                sin_ee_ry, cos_ee_ry = jnp.sin(ee_ry), jnp.cos(ee_ry)
+                sin_ee_rz, cos_ee_rz = jnp.sin(ee_rz), jnp.cos(ee_rz)
+                next_state = next_state.at[self.angle_idx[0]].set(
+                    jnp.arctan2(sin_theta, cos_theta)
+                )
                 next_state = next_state.at[self.angle_idx[1]].set(
-                    jnp.arctan2(jnp.sin(ee_rx), jnp.cos(ee_rx))
+                    jnp.arctan2(sin_ee_rx, cos_ee_rx)
                 )
                 next_state = next_state.at[self.angle_idx[2]].set(
-                    jnp.arctan2(jnp.sin(ee_ry), jnp.cos(ee_ry))
+                    jnp.arctan2(sin_ee_ry, cos_ee_ry)
                 )
                 next_state = next_state.at[self.angle_idx[3]].set(
-                    jnp.arctan2(jnp.sin(ee_rz), jnp.cos(ee_rz))
+                    jnp.arctan2(sin_ee_rz, cos_ee_rz)
                 )
             else:
                 theta = next_state[..., self.angle_idx]
@@ -1687,7 +1688,7 @@ class SpotDynamicsModel(DynamicsModel):
 
     def reduce_x(self, x):
         if self.include_ee_orientation:
-            indices_in_encoded = [2, 12 + 1, 13 + 2, 14 + 3]
+            indices_in_encoded = [2, 13, 15, 17]
             theta = jnp.arctan2(
                 x[..., indices_in_encoded[0]], x[..., indices_in_encoded[0] + 1]
             )
@@ -1706,9 +1707,7 @@ class SpotDynamicsModel(DynamicsModel):
                     jnp.atleast_1d(theta),
                     x[..., indices_in_encoded[0] + 2 : indices_in_encoded[1]],
                     jnp.atleast_1d(ee_rx),
-                    x[..., indices_in_encoded[1] + 2 : indices_in_encoded[2]],
                     jnp.atleast_1d(ee_ry),
-                    x[..., indices_in_encoded[2] + 2 : indices_in_encoded[3]],
                     jnp.atleast_1d(ee_rz),
                     x[..., indices_in_encoded[3] + 2 :],
                 ],
@@ -1807,7 +1806,7 @@ class SpotDynamicsModel(DynamicsModel):
         Use kinematic model with weighted velocity between previous and current velocity
         Note: Need to add base velocity and rotation induced velocity to get end effector velocity in global frame
 
-        velocity_dx = (alpha * previous_velocity + (1 - alpha) * current_velocity + additional_velocities) / dt
+        velocity_dx = (alpha * previous_velocity + (1 - alpha) * commanded_velocity + additional_velocities) / dt
         position_dx = velocity
         """
         # convert input to global frame if in local frame

@@ -3,6 +3,7 @@ import pickle
 import glob
 import jax
 import jax.numpy as jnp
+import copy
 
 from functools import partial
 from typing import Dict, Any, List, Union, Tuple
@@ -457,26 +458,100 @@ def _prepare_spot_datasets(
     # unpack dataset
     x = jnp.array([d.observation for d in dataset_pre])
     u = jnp.array([d.action for d in dataset_pre])
-    y = jnp.array([d.next_observation for d in dataset_pre])
+    y = jnp.array([d.next_observation for d in dataset_pre])    
 
+    assert (
+        x.shape[-1] == 22
+    ), f"Invalid state dimensions, x shape {x.shape[-1]} doesn't match 22"
+    assert (
+        u.shape[-1] == 9
+    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match 9"
+    assert (
+        y.shape[-1] == 22
+    ), f"Invalid state dimensions, y shape {y.shape[-1]} doesn't match 22"
+
+    # plot first 100 x,y and u and save plots to file
+    state_labels = [
+        'base_x',
+        'base_y',
+        'sin_base_theta',
+        'cos_base_theta',
+        'base_vx',
+        'base_vy',
+        'base_vtheta',
+        'ee_x',
+        'ee_y',
+        'ee_z',
+        'ee_vx',
+        'ee_vy',
+        'ee_vz',
+        'sin_ee_rx',
+        'cos_ee_rx',
+        'sin_ee_ry',
+        'cos_ee_ry',
+        'sin_ee_rz',
+        'cos_ee_rz',
+        'ee_vrx',
+        'ee_vry',
+        'ee_vrz'
+    ]
+
+    action_labels = [
+        'base_vx',
+        'base_vy',
+        'base_vtheta',
+        'ee_vx',
+        'ee_vy',
+        'ee_vz',
+        'ee_vrx',
+        'ee_vry',
+        'ee_vrz'
+    ]
+    x_plot = x[:100]
+    y_plot = y[:100]
+    u_plot = u[:100]
+    import matplotlib.pyplot as plt
+    n_rows = len(state_labels)
+    n_cols = 3
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
+
+    for i in range(n_rows):
+        for j in range(n_cols-1):
+            axs[i, j].plot(x_plot[:, i], label='x')
+            axs[i, j].plot(y_plot[:, i], label='y')
+            axs[i, j].set_title(state_labels[i])
+            axs[i, j].legend()
+    
+    # plot actions
+    for i in range(len(action_labels)):
+        axs[i, 2].plot(u_plot[:, i], label='u')
+        axs[i, 2].set_title(action_labels[i])
+        axs[i, 2].legend()
+
+    plt.savefig('state_plot.png')
 
     # angles are already encoded in the dataset, let's decode them and cast into [-\pi, \pi] 
     if include_ee_orientation:
-        indices_in_encoded = [angle_idx[0], angle_idx[1]+1, angle_idx[2]+2, angle_idx[3]+3]
-        x = decode_angles_fn(x, angle_idx=indices_in_encoded[0])
-        y = decode_angles_fn(y, angle_idx=indices_in_encoded[0])
-        x = decode_angles_fn(x, angle_idx=indices_in_encoded[1])
-        y = decode_angles_fn(y, angle_idx=indices_in_encoded[1])
-        x = decode_angles_fn(x, angle_idx=indices_in_encoded[2])
-        y = decode_angles_fn(y, angle_idx=indices_in_encoded[2])
-        x = decode_angles_fn(x, angle_idx=indices_in_encoded[3])
-        y = decode_angles_fn(y, angle_idx=indices_in_encoded[3])
+        x = decode_angles_fn(x, angle_idx=angle_idx[0])
+        y = decode_angles_fn(y, angle_idx=angle_idx[0])
+
+        x = decode_angles_fn(x, angle_idx=angle_idx[1])
+        y = decode_angles_fn(y, angle_idx=angle_idx[1])
+
+        x = decode_angles_fn(x, angle_idx=angle_idx[2])
+        y = decode_angles_fn(y, angle_idx=angle_idx[2])
+    
+        x = decode_angles_fn(x, angle_idx=angle_idx[3])
+        y = decode_angles_fn(y, angle_idx=angle_idx[3])
         x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
     else:
@@ -486,7 +561,7 @@ def _prepare_spot_datasets(
         y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
 
     # save raw y for goal addition
-    y_raw = y
+    y_raw = copy.deepcopy(y)
 
     # action stacking and action delay
     # note: we can can't split action delay if we use action stacking
@@ -502,20 +577,26 @@ def _prepare_spot_datasets(
     if include_ee_orientation:
         x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+
         x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
         if encode_angles:
             indices_in_encoded = [angle_idx[0], angle_idx[1]+1, angle_idx[2]+2, angle_idx[3]+3]
             x = encode_angles_fn(x, angle_idx=indices_in_encoded[0])
             y = encode_angles_fn(y, angle_idx=indices_in_encoded[0])
+
             x = encode_angles_fn(x, angle_idx=indices_in_encoded[1])
             y = encode_angles_fn(y, angle_idx=indices_in_encoded[1])
+
             x = encode_angles_fn(x, angle_idx=indices_in_encoded[2])
             y = encode_angles_fn(y, angle_idx=indices_in_encoded[2])
+            
             x = encode_angles_fn(x, angle_idx=indices_in_encoded[3])
             y = encode_angles_fn(y, angle_idx=indices_in_encoded[3])
     else:
@@ -528,6 +609,38 @@ def _prepare_spot_datasets(
     # remove first n steps (since often not much is happening)
     x, u, y = x[skip_first_n:], u[skip_first_n:], y[skip_first_n:]
     y_raw = y_raw[skip_first_n:]
+
+    # plot again
+    x_plot = x[:100]
+    y_plot = y[:100]
+    u_plot = u[:100]
+
+    # get second size of u
+    len_u = u.shape[1]
+    amount_of_actions = len_u // 9
+
+    n_rows = len(state_labels)
+    n_cols = 3
+
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
+
+    for i in range(n_rows):
+        for j in range(n_cols-1):
+            axs[i, j].plot(x_plot[:, i], label='x')
+            axs[i, j].plot(y_plot[:, i], label='y')
+            axs[i, j].set_title(state_labels[i])
+            axs[i, j].legend()
+
+    # plot actions
+    for i in range(9):
+        for j in range(amount_of_actions):
+            axs[i, 2].plot(u_plot[:, i + j * 9], label='u')
+            axs[i, 2].set_title(action_labels[i])
+            axs[i, 2].legend()
+
+    plt.savefig('state_plot_after.png')
+
+
 
     if add_goal:
         k = 10
@@ -587,11 +700,8 @@ def get_spot_recorded_data(
 ):
     if include_ee_orientation:
         recordings_dirs = [
-            os.path.join(DATA_DIR, "recordings_spot_new_v0"),
-            os.path.join(DATA_DIR, "recordings_spot_new_v1"),
-            os.path.join(DATA_DIR, "recordings_spot_new_v2"),
-            os.path.join(DATA_DIR, "recordings_spot_new_v3"),
-            os.path.join(DATA_DIR, "recordings_spot_new_v4"),
+            # os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
+            os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
         ]
         angle_idx = [2, 12, 13, 14]
     else:
@@ -621,7 +731,7 @@ def get_spot_recorded_data(
         action_delay_base=action_delay_base,
         action_delay_ee=action_delay_ee,
         num_stacked_actions=num_stacked_actions,
-        angle_idx=angle_idx,
+        angle_idx=[2, 12, 13, 14],
         add_goal=add_goal,
     )
     x, y = map(lambda x: jnp.concatenate(x, axis=0), zip(*map(prep_fn, datasets_pre)))

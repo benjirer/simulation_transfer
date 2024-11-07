@@ -255,20 +255,18 @@ def experiment(
         ]
         if include_ee_orientation:
             OUPUTSCALE_SPOT += [
-                0.2, # ee_rx_sin
-                0.2, # ee_rx_cos
-                0.2, # ee_ry_sin
-                0.2, # ee_ry_cos
-                0.2, # ee_rz_sin
-                0.2, # ee_rz_cos
-                0.2, # ee_vrx
-                0.2, # ee_vry
-                0.2, # ee_vrz
+                1.0, # ee_rx_sin
+                1.0, # ee_rx_cos
+                1.0, # ee_ry_sin
+                1.0, # ee_ry_cos
+                1.0, # ee_rz_sin
+                1.0, # ee_rz_cos
+                1.0, # ee_vrx
+                1.0, # ee_vry
+                1.0, # ee_vrz
             ]
         # OUPUTSCALE_SPOT = 1.0
 
-        print("In and output size of sim", sim.input_size, sim.output_size)
-        print("size of output scale", len(OUPUTSCALE_SPOT))
         sim = AdditiveSim(
             base_sims=[
                 sim,
@@ -284,8 +282,6 @@ def experiment(
         if predict_difference:
             sim = PredictStateChangeWrapper(sim)
 
-        print("size of normalization stats", sim.normalization_stats)
-        print("size of domain", sim.domain)
         model = BNN_FSVGD_SimPrior(
             **standard_bnn_params,
             normalization_stats=sim.normalization_stats,
@@ -348,41 +344,47 @@ def experiment(
     )
 
     # get policy from offline data
-    policy, params, metrics, bnn_model = (
-        rl_from_offline_data.prepare_policy_from_offline_data(
-            bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
-        )
+    # policy, params, metrics, bnn_model = (
+    #     rl_from_offline_data.prepare_policy_from_offline_data(
+    #         bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
+    #     )
+    # )
+
+    # train model only
+    bnn_model = rl_from_offline_data.train_model(
+        bnn_train_steps=bnn_train_steps,
+        return_best_bnn=bool(best_bnn_model),
     )
 
     skip_eval = False
     if not skip_eval:
         # evaluate learned model
-        # rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
+        rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
         
-        # evaluate policy on learned model
-        rl_from_offline_data.evaluate_policy(
-            policy,
-            bnn_model,
-            key=key_evaluation_trained_bnn,
-            num_evals=10,
-            save_traj_dir=(
-                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
-                if save_traj_local
-                else None
-            ),
-        )
+        # # evaluate policy on learned model
+        # rl_from_offline_data.evaluate_policy(
+        #     policy,
+        #     bnn_model,
+        #     key=key_evaluation_trained_bnn,
+        #     num_evals=10,
+        #     save_traj_dir=(
+        #         f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+        #         if save_traj_local
+        #         else None
+        #     ),
+        # )
 
-        # evaluate policy on default simulator
-        rl_from_offline_data.evaluate_policy_on_the_simulator(
-            policy,
-            key=key_evaluation_pretrained_bnn,
-            num_evals=10,
-            save_traj_dir=(
-                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
-                if save_traj_local
-                else None
-            ),
-        )
+        # # evaluate policy on default simulator
+        # rl_from_offline_data.evaluate_policy_on_the_simulator(
+        #     policy,
+        #     key=key_evaluation_pretrained_bnn,
+        #     num_evals=10,
+        #     save_traj_dir=(
+        #         f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+        #         if save_traj_local
+        #         else None
+        #     ),
+        # )
 
     if wandb_logging:
         wandb.finish()

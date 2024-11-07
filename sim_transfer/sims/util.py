@@ -207,7 +207,12 @@ def plot_spot_trajectory(
     rewards = traj.reward
     next_observations = traj.next_observation
     print("Plotting observations with shape", observations.shape)
-    assert observations.shape[-1] == 15 or observations.shape[-1] == 16 or observations.shape[-1] == 24 or observations.shape[-1] == 28
+    assert (
+        observations.shape[-1] == 15
+        or observations.shape[-1] == 16
+        or observations.shape[-1] == 24
+        or observations.shape[-1] == 28
+    )
 
     # decode angles
     if observations.shape[-1] == 16 and not include_ee_orientation:
@@ -223,12 +228,11 @@ def plot_spot_trajectory(
         next_observations = decode_angles(next_observations, 13)
         observations = decode_angles(observations, 14)
         next_observations = decode_angles(next_observations, 14)
-    
+
     # define idxs
     goal_dim = 3 if not include_ee_orientation else 6
     action_dim = 6 if not include_ee_orientation else 9
     state_dim = 12 if not include_ee_orientation else 18
-
 
     if plot_mode == "transitions_eval_full":
         print("Plotting spot trajectory in transitions_eval_full mode")
@@ -260,7 +264,10 @@ def plot_spot_trajectory(
                     label="Heading" if idx == 0 else None,
                 )
                 ax1.plot(
-                    data[:, state_dim], data[:, state_dim + 1], "ro", label="Goal" if idx == 0 else None
+                    data[:, state_dim],
+                    data[:, state_dim + 1],
+                    "ro",
+                    label="Goal" if idx == 0 else None,
                 )
                 ax1.plot(
                     data[0, 0],
@@ -315,7 +322,7 @@ def plot_spot_trajectory(
             # EE-Pos-Goal Distance
             for idx, data in enumerate(traj_curr):
                 ee_pos = data[:, 6:9]
-                goal_pos = data[:, state_dim:state_dim + 3]
+                goal_pos = data[:, state_dim : state_dim + 3]
                 distance = np.linalg.norm(ee_pos - goal_pos, axis=1)
                 time_steps = np.arange(data.shape[0])
                 ax3.plot(
@@ -334,7 +341,7 @@ def plot_spot_trajectory(
             if include_ee_orientation:
                 for idx, data in enumerate(traj_curr):
                     ee_orient = data[:, 12:15]
-                    goal_orient = data[:, state_dim + 3: state_dim + 6]
+                    goal_orient = data[:, state_dim + 3 : state_dim + 6]
                     # cast both to [-pi, pi]
                     ee_orient = (ee_orient + np.pi) % (2 * np.pi) - np.pi
                     goal_orient = (goal_orient + np.pi) % (2 * np.pi) - np.pi
@@ -380,9 +387,15 @@ def plot_spot_trajectory(
                 ax5.plot(time_steps, data[:, 4], label="EE Vy" if idx == 0 else None)
                 ax5.plot(time_steps, data[:, 5], label="EE Vz" if idx == 0 else None)
                 if include_ee_orientation:
-                    ax5.plot(time_steps, data[:, 6], label="EE Roll" if idx == 0 else None)
-                    ax5.plot(time_steps, data[:, 7], label="EE Pitch" if idx == 0 else None)
-                    ax5.plot(time_steps, data[:, 8], label="EE Yaw" if idx == 0 else None)
+                    ax5.plot(
+                        time_steps, data[:, 6], label="EE Roll" if idx == 0 else None
+                    )
+                    ax5.plot(
+                        time_steps, data[:, 7], label="EE Pitch" if idx == 0 else None
+                    )
+                    ax5.plot(
+                        time_steps, data[:, 8], label="EE Yaw" if idx == 0 else None
+                    )
             ax5.set_title("Actions")
             ax5.set_xlabel("Time Step")
             ax5.set_ylabel("Action [m/s or rad/s]")
@@ -400,7 +413,7 @@ def plot_spot_trajectory(
             ee_pos_goal_error = []
             for traj in trajs:
                 ee_pos = traj[:, 6:9]
-                goal_pos = traj[:, state_dim:state_dim + 3]
+                goal_pos = traj[:, state_dim : state_dim + 3]
                 error = np.linalg.norm(ee_pos - goal_pos, axis=1)
                 ee_pos_goal_error.append(error)
             ee_pos_goal_error = np.array(ee_pos_goal_error)
@@ -409,14 +422,13 @@ def plot_spot_trajectory(
                 ee_orient_goal_error = []
                 for traj in trajs:
                     ee_orient = traj[:, 12:15]
-                    goal_orient = traj[:, state_dim + 3: state_dim + 6]
+                    goal_orient = traj[:, state_dim + 3 : state_dim + 6]
                     # cast both to [-pi, pi]
                     ee_orient = (ee_orient + np.pi) % (2 * np.pi) - np.pi
                     goal_orient = (goal_orient + np.pi) % (2 * np.pi) - np.pi
                     error = np.linalg.norm(ee_orient - goal_orient, axis=1)
                     ee_orient_goal_error.append(error)
                 ee_orient_goal_error = np.array(ee_orient_goal_error)
-
 
             # plot errors
             if not include_ee_orientation:
@@ -507,8 +519,11 @@ def plot_spot_trajectory(
                 # get mean orient error after 10 steps
                 mean_orient_error_after_10_steps = np.mean(mean_error[10:])
 
-
-            mean_error_after_10_steps = (mean_pos_error_after_10_steps, mean_orient_error_after_10_steps) if include_ee_orientation else mean_pos_error_after_10_steps
+            mean_error_after_10_steps = (
+                (mean_pos_error_after_10_steps, mean_orient_error_after_10_steps)
+                if include_ee_orientation
+                else mean_pos_error_after_10_steps
+            )
             return fig, ax, mean_error_after_10_steps
 
         return plot_ee_goal_error(observations)
@@ -531,9 +546,30 @@ def sample_pos_and_goal_spot(
     ),
     standard_init_goal: jnp.array = jnp.array([2.0, 0.0, 0.6]),
     standard_init_state_with_ee_orientation: jnp.array = jnp.array(
-        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.92, -0.012, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.92,
+            -0.012,
+            0.6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
     ),
-    standard_init_goal_with_ee_orientation: jnp.array = jnp.array([2.0, 0.0, 0.6, 0.0, 0.0, 0.0]),
+    standard_init_goal_with_ee_orientation: jnp.array = jnp.array(
+        [2.0, 0.0, 0.6, 0.0, 0.0, 0.0]
+    ),
     max_goal_distance_radius: Optional[float] = 2.0,
     margins: jnp.array = jnp.array(
         [
@@ -618,10 +654,12 @@ def sample_pos_and_goal_spot(
     ), f"Theta + margins is not within the domain"
     if include_ee_orientation:
         assert jnp.all(
-            (project_angle(standard_init_state[12:15] - margins[12:15])) >= domain_lower[12:15]
+            (project_angle(standard_init_state[12:15] - margins[12:15]))
+            >= domain_lower[12:15]
         ), f"EE angles - margins is not within the domain"
         assert jnp.all(
-            (project_angle(standard_init_state[12:15] + margins[12:15])) <= domain_upper[12:15]
+            (project_angle(standard_init_state[12:15] + margins[12:15]))
+            <= domain_upper[12:15]
         ), f"EE angles + margins is not within the domain"
         assert jnp.all(
             (standard_init_state[15:18] - margins[15:18]) >= domain_lower[15:18]
@@ -644,13 +682,15 @@ def sample_pos_and_goal_spot(
                 (standard_init_goal[:3] - margins[6:9]) >= domain_lower[6:9]
             ), f"Goal - margins is not within the domain"
             assert jnp.all(
-                (standard_init_goal[:3]  + margins[6:9]) <= domain_upper[6:9]
+                (standard_init_goal[:3] + margins[6:9]) <= domain_upper[6:9]
             ), f"Goal + margins is not within the domain"
             assert jnp.all(
-                (standard_init_goal[3:] - margins[12:15]) >= domain_lower[12:15]
+                (project_angle(standard_init_goal[3:] - margins[12:15]))
+                >= domain_lower[12:15]
             ), f"Goal - margins is not within the domain"
             assert jnp.all(
-                (standard_init_goal[3:] + margins[12:15]) <= domain_upper[12:15]
+                (project_angle(standard_init_goal[3:] + margins[12:15]))
+                <= domain_upper[12:15]
             ), f"Goal + margins is not within the domain"
 
     (
@@ -688,8 +728,11 @@ def sample_pos_and_goal_spot(
     ) * jax.random.normal(key_ee_vel, shape=(3,))
     # ee orientation
     if include_ee_orientation:
-        init_ee_orientation = standard_init_state[12:15] + jax.random.uniform(
-            key_ee_pos, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+        init_ee_orientation = project_angle(
+            standard_init_state[12:15]
+            + jax.random.uniform(
+                key_ee_pos, shape=(3,), minval=-margins[12:15], maxval=margins[12:15]
+            )
         )
         init_ee_ang_vel = standard_init_state[15:18] + jnp.array(
             margins[15:18]
@@ -699,9 +742,7 @@ def sample_pos_and_goal_spot(
         [init_base_pos, init_theta, init_base_vel, init_ee_pos, init_ee_vel]
     )
     if include_ee_orientation:
-        init_state = jnp.concatenate(
-            [init_state, init_ee_orientation, init_ee_ang_vel]
-        )
+        init_state = jnp.concatenate([init_state, init_ee_orientation, init_ee_ang_vel])
     assert init_state.shape == (
         state_dim,
     ), f"Invalid init state shape {init_state.shape}"
@@ -710,10 +751,14 @@ def sample_pos_and_goal_spot(
     if max_goal_distance_radius is not None:
 
         if include_ee_orientation:
-            key_goal_angle, key_goal_distance, key_goal_z, key_ee_orientation_goal = jax.random.split(key_goal, 4)
+            key_goal_angle, key_goal_distance, key_goal_z, key_ee_orientation_goal = (
+                jax.random.split(key_goal, 4)
+            )
 
         else:
-            key_goal_angle, key_goal_distance, key_goal_z = jax.random.split(key_goal, 3)
+            key_goal_angle, key_goal_distance, key_goal_z = jax.random.split(
+                key_goal, 3
+            )
 
         # sample goal x,y in front of the robot (direction offset within [-π/2, π/2] relative to theta)
         angle_offset = jax.random.uniform(
@@ -740,10 +785,18 @@ def sample_pos_and_goal_spot(
 
         if include_ee_orientation:
             # sample goal ee orientation
-            ee_orientation_goal = standard_init_goal[3:] + jax.random.uniform(
-                key_ee_orientation_goal, shape=(3,), minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]), maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi])
+            ee_orientation_goal = project_angle(
+                standard_init_goal[3:]
+                + jax.random.uniform(
+                    key_ee_orientation_goal,
+                    shape=(3,),
+                    minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]),
+                    maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi]),
+                )
             )
-            init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z]), ee_orientation_goal])
+            init_goal = jnp.concatenate(
+                [goal_xy, jnp.array([goal_z]), ee_orientation_goal]
+            )
         else:
             init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z])])
     else:
@@ -755,7 +808,10 @@ def sample_pos_and_goal_spot(
         )
         if include_ee_orientation:
             init_goal_ee = standard_init_goal[3:] + jax.random.uniform(
-                key_goal, shape=(3,), minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]), maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi])
+                key_goal,
+                shape=(3,),
+                minval=-jnp.array([jnp.pi, jnp.pi, jnp.pi]),
+                maxval=jnp.array([jnp.pi, jnp.pi, jnp.pi]),
             )
             init_goal_ee = jnp.minimum(
                 jnp.maximum(init_goal_ee, domain_lower[12:15]), domain_upper[12:15]
@@ -765,7 +821,45 @@ def sample_pos_and_goal_spot(
     return init_state, init_goal
 
 
+def euler_to_direction_vectorized(rolls, pitches, yaws):
+    """Convert arrays of Euler angles to direction vectors."""
+    c_r = jnp.cos(rolls)
+    s_r = jnp.sin(rolls)
+    c_p = jnp.cos(pitches)
+    s_p = jnp.sin(pitches)
+    c_y = jnp.cos(yaws)
+    s_y = jnp.sin(yaws)
+
+    zeros = jnp.zeros_like(rolls)
+    ones = jnp.ones_like(rolls)
+
+    Rx = jnp.stack([
+        jnp.stack([ones, zeros, zeros], axis=-1),
+        jnp.stack([zeros, c_r, -s_r], axis=-1),
+        jnp.stack([zeros, s_r, c_r], axis=-1)
+    ], axis=-2)
+
+    Ry = jnp.stack([
+        jnp.stack([c_p, zeros, s_p], axis=-1),
+        jnp.stack([zeros, ones, zeros], axis=-1),
+        jnp.stack([-s_p, zeros, c_p], axis=-1)
+    ], axis=-2)
+
+    Rz = jnp.stack([
+        jnp.stack([c_y, -s_y, zeros], axis=-1),
+        jnp.stack([s_y, c_y, zeros], axis=-1),
+        jnp.stack([zeros, zeros, ones], axis=-1)
+    ], axis=-2)
+
+    R = jnp.einsum('nij,njk,nkl->nil', Rz, Ry, Rx)
+    directions = R[:, :, 0]
+    return directions
+
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.lines import Line2D
+
     # test sample_pos_and_goal_spot
     rng_key = jax.random.PRNGKey(0)
     domain_lower = jnp.array(
@@ -851,7 +945,11 @@ if __name__ == "__main__":
 
     # test sample_pos_and_goal_spot with max_goal_distance_radius
     init_state, init_goal = sample_pos_and_goal_spot(
-        rng_key, domain_lower, domain_upper, max_goal_distance_radius=2.0, include_ee_orientation=True
+        rng_key,
+        domain_lower,
+        domain_upper,
+        max_goal_distance_radius=2.0,
+        include_ee_orientation=True,
     )
     print("init_state", init_state)
     print("init_goal", init_goal)
@@ -903,5 +1001,84 @@ if __name__ == "__main__":
     axes.set_title("Sampled init states and goals")
     axes.legend()
     fig.savefig("sampled_init_states_goals.png")
+
+    # Plot EE positions and orientations in 3D
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # EE positions
+    ee_positions = np.array(init_states[:, 6:9])
+    ax.scatter(
+        ee_positions[:, 0],
+        ee_positions[:, 1],
+        ee_positions[:, 2],
+        c='g',
+        label='EE positions'
+    )
+
+    # EE orientations
+    rolls = init_states[:, 12]
+    pitches = init_states[:, 13]
+    yaws = init_states[:, 14]
+    directions = euler_to_direction_vectorized(rolls, pitches, yaws)
+    directions = np.array(directions)
+    ax.quiver(
+        ee_positions[:, 0],
+        ee_positions[:, 1],
+        ee_positions[:, 2],
+        directions[:, 0],
+        directions[:, 1],
+        directions[:, 2],
+        length=0.1,
+        normalize=True,
+        color='g'
+    )
+
+    # Goal positions
+    goal_positions = np.array(init_goals[:, 0:3])
+    ax.scatter(
+        goal_positions[:, 0],
+        goal_positions[:, 1],
+        goal_positions[:, 2],
+        c='m',
+        label='Goal positions'
+    )
+
+    # Goal orientations
+    goal_rolls = init_goals[:, 3]
+    goal_pitches = init_goals[:, 4]
+    goal_yaws = init_goals[:, 5]
+    goal_directions = euler_to_direction_vectorized(goal_rolls, goal_pitches, goal_yaws)
+    goal_directions = np.array(goal_directions)
+    ax.quiver(
+        goal_positions[:, 0],
+        goal_positions[:, 1],
+        goal_positions[:, 2],
+        goal_directions[:, 0],
+        goal_directions[:, 1],
+        goal_directions[:, 2],
+        length=0.1,
+        normalize=True,
+        color='m'
+    )
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('EE Positions and Orientations')
+
+    # Custom legend
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', label='EE positions',
+               markerfacecolor='g', markersize=8),
+        Line2D([0], [0], marker='o', color='w', label='Goal positions',
+               markerfacecolor='m', markersize=8),
+        Line2D([0], [0], color='g', lw=2, label='EE orientations'),
+        Line2D([0], [0], color='m', lw=2, label='Goal orientations')
+    ]
+    ax.legend(handles=legend_elements)
+
+    plt.show()
+    fig.savefig("ee_positions_orientations.png")
 
     print("All tests passed!")

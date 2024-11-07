@@ -298,7 +298,134 @@ class RLFromOfflineData:
         y_test = y_data[num_train:]
 
         return x_train, y_train, x_test, y_test
+    
+    def visualize_data(self, output_dir='plots', max_timesteps=None):
+        """
+        Visualizes the time series data by plotting all state and action variables
+        over time in one figure using subplots arranged in two columns,
+        matching action variables with corresponding state variables.
 
+        Args:
+            output_dir (str): Directory where the plot will be saved.
+            max_timesteps (int or None): Maximum number of timesteps to plot. If None, plots all timesteps.
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        time_steps_train = self.x_train.shape[0]
+
+        # If max_timesteps is specified, limit the number of timesteps
+        if max_timesteps is not None:
+            time_steps = min(time_steps_train, max_timesteps)
+            x_train = self.x_train[:time_steps]
+            y_train = self.y_train[:time_steps]
+        else:
+            time_steps = time_steps_train
+            x_train = self.x_train
+            y_train = self.y_train
+
+        # Define state and action labels
+        state_labels = [
+            'base_x',
+            'base_y',
+            'sin_base_theta',
+            'cos_base_theta',
+            'base_vx',
+            'base_vy',
+            'base_vtheta',
+            'ee_x',
+            'ee_y',
+            'ee_z',
+            'ee_vx',
+            'ee_vy',
+            'ee_vz',
+            'sin_ee_rx',
+            'cos_ee_rx',
+            'sin_ee_ry',
+            'cos_ee_ry',
+            'sin_ee_rz',
+            'cos_ee_rz',
+            'ee_vrx',
+            'ee_vry',
+            'ee_vrz'
+        ]
+
+        action_labels = [
+            'base_vx',
+            'base_vy',
+            'base_vtheta',
+            'ee_vx',
+            'ee_vy',
+            'ee_vz',
+            'ee_vrx',
+            'ee_vry',
+            'ee_vrz'
+        ]
+
+        num_state_vars = len(state_labels)
+        num_action_vars = len(action_labels)
+        num_frame_stack = self.num_frame_stack  # Assuming this attribute exists
+
+        # Total number of action variables in input: (1 + num_frame_stack) * num_action_vars
+        total_action_vars = (1 + num_frame_stack) * num_action_vars
+
+        # x_train is of shape [time_steps, num_state_vars + total_action_vars]
+        # Extract state variables
+        state_data = x_train[:, :num_state_vars]
+
+        # Extract action variables
+        action_data = x_train[:, num_state_vars:num_state_vars + total_action_vars]
+
+        # Create a mapping from action labels to indices
+        action_label_to_index = {label: idx for idx, label in enumerate(action_labels)}
+
+        # Prepare the figure
+        num_rows = num_state_vars       # One row per state variable
+        num_cols = 2                    # One column for states, one for actions
+
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(12, num_rows * 2), sharex=True)
+        time = range(time_steps)
+
+        # Plot state variables in the first column
+        for idx in range(num_state_vars):
+            axes[idx, 0].plot(time, state_data[:, idx])
+            axes[idx, 0].set_ylabel(state_labels[idx])
+            if idx == 0:
+                axes[idx, 0].set_title('State Variables')
+            if idx == num_state_vars - 1:
+                axes[idx, 0].set_xlabel('Time Step')
+
+        # split stacked actions into individual actions, for now lets assume num_frame_stack = 2
+        first_action_data = action_data[:, :num_action_vars]
+        second_action_data = action_data[:, num_action_vars:2*num_action_vars]
+        # third_action_data = action_data[:, 2*num_action_vars:3*num_action_vars]    
+
+        # Plot corresponding action variables in the second column
+        for idx in range(num_state_vars):
+            state_label = state_labels[idx]
+            if state_label in action_labels:
+                action_idx = action_label_to_index[state_label]
+                axes[idx, 1].plot(time, first_action_data[:, action_idx], label='t')
+                axes[idx, 1].plot(time, second_action_data[:, action_idx], label='t+1')
+                # axes[idx, 1].plot(time, third_action_data[:, action_idx], label='t+2')
+                axes[idx, 1].set_ylabel(state_label)
+                axes[idx, 1].legend()
+            else:
+                # If no corresponding action, turn off the subplot
+                axes[idx, 1].axis('off')
+
+            if idx == 0:
+                axes[idx, 1].set_title('Action Variables')
+            if idx == num_state_vars - 1:
+                axes[idx, 1].set_xlabel('Time Step')
+
+        # Adjust layout
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'time_series_plot.png'))
+        plt.close()
+
+        print(f'Time series plot saved as \"time_series_plot.png\" in the \"{output_dir}\" directory.')
+            
     def train_model(
         self, bnn_train_steps: int, return_best_bnn: bool = True
     ) -> BNN_SVGD:
@@ -311,6 +438,10 @@ class RLFromOfflineData:
             self.x_eval,
             self.y_eval,
         )
+
+        # visualize data
+        self.visualize_data(output_dir='plots', max_timesteps=10)
+
         x_test, y_test = self.x_test, self.y_test
 
         # create bnn model
@@ -912,7 +1043,10 @@ class RLFromOfflineData:
         if use_all_data:
             if self.include_ee_orientation:
                 dir_path = (
-                    os.path.join(DATA_DIR, "test_data_spot_new"),
+                    os.path.join(DATA_DIR, "recordings_spot_ee_v0"),
+                    os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
+                    os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
+                    os.path.join(DATA_DIR, "test_data_spot_ee"),
                 )
             else:
                 dir_path = (
@@ -935,7 +1069,8 @@ class RLFromOfflineData:
             dir_path = (
                 os.path.join(DATA_DIR, "test_data_spot")
                 if not self.include_ee_orientation
-                else os.path.join(DATA_DIR, "test_data_spot_new")
+                # else os.path.join(DATA_DIR, "test_data_spot_ee")
+                else os.path.join(DATA_DIR, "tmp")
             )
             eval_trajectories_paths = sorted(
                 [
@@ -951,7 +1086,7 @@ class RLFromOfflineData:
         # extra evaluation settings
         action_delay_base = 0
         action_delay_ee = 0
-        step_range = 200
+        step_range = 500
         
         if self.include_ee_orientation:
             state_labels = [
@@ -970,6 +1105,29 @@ class RLFromOfflineData:
                 "ee_rx",
                 "ee_ry",
                 "ee_rz",
+                "ee_rvx",
+                "ee_rvy",
+                "ee_rvz",
+            ]
+            state_labels_encoded = [
+                "base_x",
+                "base_y",
+                "base_theta",
+                "base_vel_x",
+                "base_vel_y",
+                "base_ang_vel",
+                "ee_x",
+                "ee_y",
+                "ee_z",
+                "ee_vx",
+                "ee_vy",
+                "ee_vz",
+                "sin_ee_rx",
+                "cos_ee_rx",
+                "sin_ee_ry",
+                "cos_ee_ry",
+                "sin_ee_rz",
+                "cos_ee_rz",
                 "ee_rvx",
                 "ee_rvy",
                 "ee_rvz",
@@ -1000,6 +1158,7 @@ class RLFromOfflineData:
                 testing_x_pre_org = jnp.array([t.observation for t in traj])
                 testing_u_pre_org = jnp.array([t.action for t in traj])
                 testing_y_org = jnp.array([t.next_observation for t in traj])
+                testing_y_org_raw = testing_y_org
                 
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 2)
                 testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 12)
@@ -1017,6 +1176,7 @@ class RLFromOfflineData:
             testing_x_pre = testing_x_pre_org[:step_range]
             testing_u_pre = testing_u_pre_org[:step_range]
             testing_y = testing_y_org[:step_range]
+            testing_y_org_raw = testing_y_org_raw[:step_range]
 
             # apply action delay
             testing_u_pre = delay_and_stack_spot_actions(
@@ -1093,6 +1253,7 @@ class RLFromOfflineData:
                     "Either spot_learned_params or bnn_model has to be provided."
                 )
 
+            y_pred_testing_raw = y_pred_testing
             if self.include_ee_orientation:
                 y_pred_testing = decode_angles_fn(y_pred_testing, 2)
                 y_pred_testing = decode_angles_fn(y_pred_testing, 12)
@@ -1191,7 +1352,7 @@ class RLFromOfflineData:
             # detailed plot of trajectory rollout and errors
             # prepare plots
             if self.include_ee_orientation:
-                fig, axs = plt.subplots(6, 3, figsize=(30, 15))
+                fig, axs = plt.subplots(9, 3, figsize=(30, 15))
                 fig_ee_error, axs_ee_error = plt.subplots(8, 1, figsize=(30, 15))
                 fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
             else:
@@ -1207,11 +1368,12 @@ class RLFromOfflineData:
                 if i + 6 < testing_y.shape[-1]:
                     axs[i, 1].plot(testing_y[:, i + 6], label="true")
                     axs[i, 1].set_title(state_labels[i + 6])
-                
+            
+            for i in range(9):
                 if self.include_ee_orientation:
-                    if i + 12 < testing_y.shape[-1]:
-                        axs[i, 2].plot(testing_y[:, i + 12], label="true")
-                        axs[i, 2].set_title(state_labels[i + 12])
+                    if i + 13 < testing_y.shape[-1]:
+                        axs[i, 2].plot(testing_y_org_raw[:, i + 13], label="true")
+                        axs[i, 2].set_title(state_labels_encoded[i + 12])
 
             # prepare error plots
             axs_ee_error[0].set_title("Running ee position error")
@@ -1245,10 +1407,11 @@ class RLFromOfflineData:
                         linestyle="--",
                     )
                 
+            for i in range(9):
                 if self.include_ee_orientation:
-                    if i + 12 < testing_y.shape[-1]:
+                    if i + 13 < testing_y.shape[-1]:
                         axs[i, 2].plot(
-                            y_pred_testing[:, i + 12],
+                            y_pred_testing[:, i + 13],
                             label=f"pred {model_name}",
                             linestyle="--",
                         )

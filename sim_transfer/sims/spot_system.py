@@ -89,7 +89,7 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
         self.encode_angle: bool = encode_angle
 
         # initialize dynamics
-        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=encode_angle)
+        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=encode_angle, include_ee_orientation=include_ee_orientation)
 
         # set default params
         self._set_default_params()
@@ -134,7 +134,7 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
     def _set_default_params(self):
         from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, SPOT_DEFAULT_OBSERVATION_NOISE_STD
         from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
-        if self.include_ee_orientation:
+        if self._include_ee_orientation:
             self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
             self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
         else:

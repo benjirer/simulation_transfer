@@ -490,7 +490,7 @@ class SpotSimEnv:
         margin_factor: float = 10.0,
         max_velocity_base: float = 1.6,
         max_ang_velocity_base: float = 1.5,
-        max_velocity_ee: float = 5.0,
+        max_velocity_ee: float = 2.5,
         max_ang_velocity_ee: float = 2.5,
         seed: int = 230492394,
         max_steps: int = 200,
