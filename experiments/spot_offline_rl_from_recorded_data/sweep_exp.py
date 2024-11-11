@@ -10,13 +10,13 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     random.seed(0)
     # random_seed = random.sample(range(1, 1_000_000), 3)
     random_seed = [42, 9126, 1913244]
-    random_seed = [10]
+    random_seed = [72]
     num_offline_collected_transitions = [800, 2000, 5000]
-    num_offline_collected_transitions = [16000]
+    num_offline_collected_transitions = [20000]
 
     parameters = {
         # parameters general
-        "num_frame_stack": [1],
+        "num_frame_stack": [0],
         "random_seed": random_seed,
         "num_offline_collected_transitions": num_offline_collected_transitions,
         "test_data_ratio": [0.15],
@@ -24,7 +24,6 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "project_name": ["ee_ori_testing"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
-        "include_ee_orientation": [True],
     }
 
     parameters_rl = {
@@ -53,8 +52,8 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "bnn_batch_size": [48],
         "likelihood_exponent": [1.0],
         "bandwidth_svgd": [5.0],
-        "num_epochs": [100],
-        "max_train_steps": [300_000],
+        "num_epochs": [70],
+        "max_train_steps": [10_000],
         "min_train_steps": [10_000],
         "num_sim_fitting_steps": [40_000],
         "length_scale_aditive_sim_gp": [1.0],

@@ -1,39 +1,48 @@
 import os
 import cloudpickle as pickle
 from typing import Callable, Any
-
 import chex
 import jax.numpy as jnp
 import jax.random as jr
 import jax.tree_util as jtu
+from jax import jit, vmap
+from jax.lax import scan
 import matplotlib.pyplot as plt
 import wandb
 from brax.training.replay_buffers import UniformSamplingQueue, ReplayBufferState
 from brax.training.types import Transition
-from jax import jit, vmap
-from jax.lax import scan
+
 from mbpo.optimizers.policy_optimizers.sac.sac import SAC
 from mbpo.systems.brax_wrapper import BraxWrapper
 
+from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
+from experiments.data_provider import _load_spot_datasets
+from experiments.data_provider import stack_spot_actions
 from sim_transfer.sims.spot_system import SpotSystem
 from sim_transfer.sims.envs import SpotSimEnv
 from sim_transfer.sims.simulators import SpotSim
 from sim_transfer.sims.util import plot_spot_trajectory
-from sim_transfer.sims.util import decode_angles
-from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
 from sim_transfer.models.abstract_model import BatchedNeuralNetworkModel
 from sim_transfer.models.bnn_svgd import BNN_SVGD
 from sim_transfer.rl.model_based_rl.learned_system import LearnedSpotSystem
-from experiments.data_provider import _load_spot_datasets
 from sim_transfer.sims.dynamics_models import SpotParams
-from sim_transfer.sims.util import angle_diff
-from sim_transfer.sims.util import encode_angles as encode_angles_fn
-from sim_transfer.sims.util import decode_angles as decode_angles_fn
-from experiments.data_provider import delay_and_stack_spot_actions
+from sim_transfer.sims.util import encode_angles_spot as encode_angles_spot_fn
+from sim_transfer.sims.util import decode_angles_spot as decode_angles_spot_fn
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_LENGTH,
+    SPOT_STATE_LENGTH_ENCODED,
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_ANGLE_IDX,
+    SPOT_STATE_LABELS,
+    SPOT_STATE_LABELS_ENCODED,
+    SPOT_ACTION_LABELS,
+    SPOT_GOAL_LABELS,
+)
 
 
 class RLFromOfflineData:
-    """Class to train a policy on offline data using SIM-MODEL or BNN-MODEL."""
+    """Class to train a policy for Spot on offline data."""
 
     def __init__(
         # parameters general
@@ -55,7 +64,6 @@ class RLFromOfflineData:
         train_sac_only_from_init_states: bool = False,
         predict_difference: bool = True,
         wandb_logging: bool = True,
-        include_ee_orientation: bool = False,
         # parameters model
         bnn_model: BatchedNeuralNetworkModel = None,
         include_aleatoric_noise: bool = True,
@@ -78,7 +86,6 @@ class RLFromOfflineData:
             None  # setting none forces use of default params
         )
         self.predict_difference = predict_difference
-        self.include_ee_orientation = include_ee_orientation
 
         # set parameters model
         self.load_pretrained_bnn_model = load_pretrained_bnn_model
@@ -116,11 +123,9 @@ class RLFromOfflineData:
         self.num_init_points_to_bs_for_learning = num_init_points_to_bs_for_sac_learning
 
         # set dimensions
-        # note: raw x is built as [robot state (12/13), ee goal (3), frame stacked actions (n*6), current action (6)] = 12/13 + 3 + n*6 + 6 = 21/22 + n*6
-        # note: raw y is built as [next robot state (12/13), ee goal (3)] = 12/13 + 3 = 15/16
-        self.state_dim = 13 if not self.include_ee_orientation else 22
-        self.action_dim = 6 if not self.include_ee_orientation else 9
-        self.goal_dim = 3 if not self.include_ee_orientation else 6
+        self.state_dim = SPOT_STATE_LENGTH_ENCODED
+        self.action_dim = SPOT_ACTION_LENGTH
+        self.goal_dim = SPOT_GOAL_LENGTH
         self.state_dim_with_goal = self.state_dim + self.goal_dim
 
         # account for frame stacking (augmenting state with actions)
@@ -298,8 +303,8 @@ class RLFromOfflineData:
         y_test = y_data[num_train:]
 
         return x_train, y_train, x_test, y_test
-    
-    def visualize_data(self, output_dir='plots', max_timesteps=None):
+
+    def visualize_data(self, output_dir="plots", max_timesteps=None):
         """
         Visualizes the time series data by plotting all state and action variables
         over time in one figure using subplots arranged in two columns,
@@ -326,40 +331,37 @@ class RLFromOfflineData:
 
         # Define state and action labels
         state_labels = [
-            'base_x',
-            'base_y',
-            'sin_base_theta',
-            'cos_base_theta',
-            'base_vx',
-            'base_vy',
-            'base_vtheta',
-            'ee_x',
-            'ee_y',
-            'ee_z',
-            'ee_vx',
-            'ee_vy',
-            'ee_vz',
-            'sin_ee_rx',
-            'cos_ee_rx',
-            'sin_ee_ry',
-            'cos_ee_ry',
-            'sin_ee_rz',
-            'cos_ee_rz',
-            'ee_vrx',
-            'ee_vry',
-            'ee_vrz'
+            "base_x",
+            "base_y",
+            "sin_base_theta",
+            "cos_base_theta",
+            "base_vx",
+            "base_vy",
+            "base_vtheta",
+            "ee_x",
+            "ee_y",
+            "ee_z",
+            "ee_vx",
+            "ee_vy",
+            "ee_vz",
+            "ee_rx",
+            "ee_ry",
+            "ee_rz",
+            "ee_vrx",
+            "ee_vry",
+            "ee_vrz",
         ]
 
         action_labels = [
-            'base_vx',
-            'base_vy',
-            'base_vtheta',
-            'ee_vx',
-            'ee_vy',
-            'ee_vz',
-            'ee_vrx',
-            'ee_vry',
-            'ee_vrz'
+            "base_vx",
+            "base_vy",
+            "base_vtheta",
+            "ee_vx",
+            "ee_vy",
+            "ee_vz",
+            "ee_vrx",
+            "ee_vry",
+            "ee_vrz",
         ]
 
         num_state_vars = len(state_labels)
@@ -374,16 +376,18 @@ class RLFromOfflineData:
         state_data = x_train[:, :num_state_vars]
 
         # Extract action variables
-        action_data = x_train[:, num_state_vars:num_state_vars + total_action_vars]
+        action_data = x_train[:, num_state_vars : num_state_vars + total_action_vars]
 
         # Create a mapping from action labels to indices
         action_label_to_index = {label: idx for idx, label in enumerate(action_labels)}
 
         # Prepare the figure
-        num_rows = num_state_vars       # One row per state variable
-        num_cols = 2                    # One column for states, one for actions
+        num_rows = num_state_vars  # One row per state variable
+        num_cols = 2  # One column for states, one for actions
 
-        fig, axes = plt.subplots(num_rows, num_cols, figsize=(12, num_rows * 2), sharex=True)
+        fig, axes = plt.subplots(
+            num_rows, num_cols, figsize=(12, num_rows * 2), sharex=True
+        )
         time = range(time_steps)
 
         # Plot state variables in the first column
@@ -391,41 +395,43 @@ class RLFromOfflineData:
             axes[idx, 0].plot(time, state_data[:, idx])
             axes[idx, 0].set_ylabel(state_labels[idx])
             if idx == 0:
-                axes[idx, 0].set_title('State Variables')
+                axes[idx, 0].set_title("State Variables")
             if idx == num_state_vars - 1:
-                axes[idx, 0].set_xlabel('Time Step')
+                axes[idx, 0].set_xlabel("Time Step")
 
         # split stacked actions into individual actions, for now lets assume num_frame_stack = 2
         first_action_data = action_data[:, :num_action_vars]
-        second_action_data = action_data[:, num_action_vars:2*num_action_vars]
-        # third_action_data = action_data[:, 2*num_action_vars:3*num_action_vars]    
+        second_action_data = action_data[:, num_action_vars : 2 * num_action_vars]
+        # third_action_data = action_data[:, 2*num_action_vars:3*num_action_vars]
 
         # Plot corresponding action variables in the second column
         for idx in range(num_state_vars):
             state_label = state_labels[idx]
             if state_label in action_labels:
                 action_idx = action_label_to_index[state_label]
-                axes[idx, 1].plot(time, first_action_data[:, action_idx], label='t')
-                axes[idx, 1].plot(time, second_action_data[:, action_idx], label='t+1')
+                axes[idx, 1].plot(time, first_action_data[:, action_idx], label="t")
+                # axes[idx, 1].plot(time, second_action_data[:, action_idx], label='t+1')
                 # axes[idx, 1].plot(time, third_action_data[:, action_idx], label='t+2')
                 axes[idx, 1].set_ylabel(state_label)
                 axes[idx, 1].legend()
             else:
                 # If no corresponding action, turn off the subplot
-                axes[idx, 1].axis('off')
+                axes[idx, 1].axis("off")
 
             if idx == 0:
-                axes[idx, 1].set_title('Action Variables')
+                axes[idx, 1].set_title("Action Variables")
             if idx == num_state_vars - 1:
-                axes[idx, 1].set_xlabel('Time Step')
+                axes[idx, 1].set_xlabel("Time Step")
 
         # Adjust layout
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'time_series_plot.png'))
+        plt.savefig(os.path.join(output_dir, "time_series_plot.png"))
         plt.close()
 
-        print(f'Time series plot saved as \"time_series_plot.png\" in the \"{output_dir}\" directory.')
-            
+        print(
+            f'Time series plot saved as "time_series_plot.png" in the "{output_dir}" directory.'
+        )
+
     def train_model(
         self, bnn_train_steps: int, return_best_bnn: bool = True
     ) -> BNN_SVGD:
@@ -438,9 +444,6 @@ class RLFromOfflineData:
             self.x_eval,
             self.y_eval,
         )
-
-        # visualize data
-        self.visualize_data(output_dir='plots', max_timesteps=10)
 
         x_test, y_test = self.x_test, self.y_test
 
@@ -738,8 +741,6 @@ class RLFromOfflineData:
 
         return policy, params, metrics, bnn_model
 
-    """============== Policy evaluation functions =============="""
-
     @staticmethod
     def arg_mean(a: chex.Array):
         """Return index of the element that is closest to the mean."""
@@ -820,45 +821,30 @@ class RLFromOfflineData:
         fig_eval, _ = plot_spot_trajectory(
             trajectories,
             plot_mode="transitions_eval_full",
-            include_ee_orientation=self.include_ee_orientation,
         )
 
         # plot trajectory ee-goal distance
         fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
             trajectories,
             plot_mode="transitions_distance_eval",
-            include_ee_orientation=self.include_ee_orientation,
         )
 
         if self.wandb_logging:
             model_name = "default_sim_model"
-            if not self.include_ee_orientation:
-                wandb.log(
-                    {
-                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
-                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                        f"mean_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps
-                        ),
-                        f"reward_mean_on_{model_name}": float(reward_mean),
-                        f"reward_std_on_{model_name}": float(reward_std),
-                    }
-                )
-            else:
-                wandb.log(
-                    {
-                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
-                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                        f"mean_pos_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps[0]
-                        ),
-                        f"mean_orient_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps[1]
-                        ),
-                        f"reward_mean_on_{model_name}": float(reward_mean),
-                        f"reward_std_on_{model_name}": float(reward_std),
-                    }
-                )
+            wandb.log(
+                {
+                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
+                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                    f"mean_pos_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps[0]
+                    ),
+                    f"mean_orient_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps[1]
+                    ),
+                    f"reward_mean_on_{model_name}": float(reward_mean),
+                    f"reward_std_on_{model_name}": float(reward_std),
+                }
+            )
             plt.close("all")
 
         # save trajectories
@@ -968,44 +954,29 @@ class RLFromOfflineData:
         fig, axes = plot_spot_trajectory(
             trajectories,
             plot_mode="transitions_eval_full",
-            include_ee_orientation=self.include_ee_orientation,
         )
 
         # plot trajectory ee-goal distance
         fig_distance, _, mean_error_after_10_steps = plot_spot_trajectory(
             trajectories,
             plot_mode="transitions_distance_eval",
-            include_ee_orientation=self.include_ee_orientation,
         )
 
         if self.wandb_logging:
-            if not self.include_ee_orientation:
-                wandb.log(
-                    {
-                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
-                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                        f"mean_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps
-                        ),
-                        f"reward_mean_on_{model_name}": float(reward_mean),
-                        f"reward_std_on_{model_name}": float(reward_std),
-                    }
-                )
-            else:
-                wandb.log(
-                    {
-                        f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
-                        f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
-                        f"mean_pos_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps[0]
-                        ),
-                        f"mean_orient_error_after_10_steps_on_{model_name}": float(
-                            mean_error_after_10_steps[1]
-                        ),
-                        f"reward_mean_on_{model_name}": float(reward_mean),
-                        f"reward_std_on_{model_name}": float(reward_std),
-                    }
-                )
+            wandb.log(
+                {
+                    f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
+                    f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
+                    f"mean_pos_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps[0]
+                    ),
+                    f"mean_orient_error_after_10_steps_on_{model_name}": float(
+                        mean_error_after_10_steps[1]
+                    ),
+                    f"reward_mean_on_{model_name}": float(reward_mean),
+                    f"reward_std_on_{model_name}": float(reward_std),
+                }
+            )
         plt.close("all")
 
         # save trajectories
@@ -1028,35 +999,27 @@ class RLFromOfflineData:
 
     def eval_model_on_dedicated_data(
         self,
-        spot_learned_params: dict = None,
         bnn_model: BatchedNeuralNetworkModel = None,
         use_all_data: bool = False,
+        step_range: int = 150,
+        use_sim_data: bool = False,
     ):
         """Evaluate model on the dedicated set of data."""
 
-        DATA_DIR = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
-            "data"
-        )
-
         # load measured data for testing and eval
+        DATA_DIR = os.path.join(
+            os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ),
+            "data",
+        )
         if use_all_data:
-            if self.include_ee_orientation:
-                dir_path = (
-                    os.path.join(DATA_DIR, "recordings_spot_ee_v0"),
-                    os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
-                    os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
-                    os.path.join(DATA_DIR, "test_data_spot_ee"),
-                )
-            else:
-                dir_path = (
-                    os.path.join(DATA_DIR, "recordings_spot_v0"),
-                    os.path.join(DATA_DIR, "recordings_spot_v1"),
-                    os.path.join(DATA_DIR, "recordings_spot_v2"),
-                    os.path.join(DATA_DIR, "recordings_spot_v3"),
-                    os.path.join(DATA_DIR, "recordings_spot_v4"),
-                    os.path.join(DATA_DIR, "test_data_spot"),
-                )
+            dir_path = (
+                os.path.join(DATA_DIR, "recordings_spot_ee_v0"),
+                os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
+                os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
+                os.path.join(DATA_DIR, "test_data_spot_ee"),
+            )
             eval_trajectories_paths = sorted(
                 [
                     os.path.join(dir_path, f)
@@ -1066,12 +1029,7 @@ class RLFromOfflineData:
                 ]
             )
         else:
-            dir_path = (
-                os.path.join(DATA_DIR, "test_data_spot")
-                if not self.include_ee_orientation
-                # else os.path.join(DATA_DIR, "test_data_spot_ee")
-                else os.path.join(DATA_DIR, "tmp")
-            )
+            dir_path = os.path.join(DATA_DIR, "test_data_spot_ee")
             eval_trajectories_paths = sorted(
                 [
                     os.path.join(dir_path, f)
@@ -1083,94 +1041,20 @@ class RLFromOfflineData:
             eval_trajectories_paths
         ), [os.path.basename(f).split(".")[0] for f in eval_trajectories_paths]
 
-        # extra evaluation settings
-        action_delay_base = 0
-        action_delay_ee = 0
-        step_range = 500
-        
-        if self.include_ee_orientation:
-            state_labels = [
-                "base_x",
-                "base_y",
-                "base_theta",
-                "base_vel_x",
-                "base_vel_y",
-                "base_ang_vel",
-                "ee_x",
-                "ee_y",
-                "ee_z",
-                "ee_vx",
-                "ee_vy",
-                "ee_vz",
-                "ee_rx",
-                "ee_ry",
-                "ee_rz",
-                "ee_rvx",
-                "ee_rvy",
-                "ee_rvz",
-            ]
-            state_labels_encoded = [
-                "base_x",
-                "base_y",
-                "base_theta",
-                "base_vel_x",
-                "base_vel_y",
-                "base_ang_vel",
-                "ee_x",
-                "ee_y",
-                "ee_z",
-                "ee_vx",
-                "ee_vy",
-                "ee_vz",
-                "sin_ee_rx",
-                "cos_ee_rx",
-                "sin_ee_ry",
-                "cos_ee_ry",
-                "sin_ee_rz",
-                "cos_ee_rz",
-                "ee_rvx",
-                "ee_rvy",
-                "ee_rvz",
-            ]
-        else:
-            state_labels = [
-                "base_x",
-                "base_y",
-                "base_theta",
-                "base_vel_x",
-                "base_vel_y",
-                "base_ang_vel",
-                "ee_x",
-                "ee_y",
-                "ee_z",
-                "ee_vx",
-                "ee_vy",
-                "ee_vz",
-            ]
-
         # setup extra eval metrics (rmse over all trajectories)
         extra_eval_metrics = {}
 
         # iterate over eval trajectories
         for traj, traj_id in zip(eval_trajectories, eval_trajectories_id):
-            if self.include_ee_orientation:
+            # unpack data
+            testing_x_pre_org = jnp.array([t.observation for t in traj])
+            testing_u_pre_org = jnp.array([t.action for t in traj])
+            testing_y_org = jnp.array([t.next_observation for t in traj])
+            testing_y_org_raw = testing_y_org
 
-                testing_x_pre_org = jnp.array([t.observation for t in traj])
-                testing_u_pre_org = jnp.array([t.action for t in traj])
-                testing_y_org = jnp.array([t.next_observation for t in traj])
-                testing_y_org_raw = testing_y_org
-                
-                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 2)
-                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 12)
-                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 13)
-                testing_x_pre_org = decode_angles_fn(testing_x_pre_org, 14)
-
-                testing_y_org = decode_angles_fn(testing_y_org, 2)
-                testing_y_org = decode_angles_fn(testing_y_org, 12)
-                testing_y_org = decode_angles_fn(testing_y_org, 13)
-                testing_y_org = decode_angles_fn(testing_y_org, 14)
-            else:
-                testing_x_pre_org, testing_u_pre_org, testing_y_org = traj
+            # decode angles as they are encoded in raw data
+            testing_x_pre_org = decode_angles_spot_fn(testing_x_pre_org, SPOT_ANGLE_IDX)
+            testing_y_org = decode_angles_spot_fn(testing_y_org, SPOT_ANGLE_IDX)
 
             # cut data
             testing_x_pre = testing_x_pre_org[:step_range]
@@ -1179,25 +1063,28 @@ class RLFromOfflineData:
             testing_y_org_raw = testing_y_org_raw[:step_range]
 
             # apply action delay
-            testing_u_pre = delay_and_stack_spot_actions(
+            testing_u_pre = stack_spot_actions(
                 u=testing_u_pre,
                 num_stacked_actions=self.num_frame_stack,
-                action_delay_base=action_delay_base,
-                action_delay_ee=action_delay_ee,
-                action_dim_ee=6 if self.include_ee_orientation else 3,
+                action_dim=self.action_dim,
             )
 
             # prepare data
-            if self.include_ee_orientation:
-                indices_in_encoded = [2, 13, 15, 17]
-                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[0])
-                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[1])
-                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[2])
-                testing_x_pre = encode_angles_fn(testing_x_pre, indices_in_encoded[3])
-            else:
-                testing_x_pre = encode_angles_fn(testing_x_pre, 2)
-
+            testing_x_pre = encode_angles_spot_fn(testing_x_pre, SPOT_ANGLE_IDX)
             testing_x = jnp.concatenate([testing_x_pre, testing_u_pre], axis=1)
+
+            from experiments.data_provider import sample_from_spot_sim
+
+            # get data from sim
+            if use_sim_data:
+                testing_x, testing_y, _, _, sim = sample_from_spot_sim(
+                    num_samples=120,
+                    num_stacked_actions=self.num_frame_stack,
+                    eval_directly=False,
+                )
+
+                testing_y = decode_angles_spot_fn(testing_y, SPOT_ANGLE_IDX)
+                testing_u_pre = testing_x[:, 19:]
 
             # prepare error metrics
             model_errors_max_ee = {}
@@ -1206,193 +1093,157 @@ class RLFromOfflineData:
             model_errors_total_base = {}
             model_errors_max_base_theta = {}
             model_errors_total_base_theta = {}
-            if self.include_ee_orientation:
-                model_errors_max_ee_orient = {}
-                model_errors_total_ee_orient = {}                
+            model_errors_max_ee_orient = {}
+            model_errors_total_ee_orient = {}
 
             # simulate trajectory with learned model
-            assert (spot_learned_params is None) != (
-                bnn_model is None
-            ), "Either spot_learned_params or bnn_model has to be None."
-            if spot_learned_params is not None:
-                model = SpotSim(
-                    encode_angle=True, spot_model_params=spot_learned_params
-                )
-                model_name = f"sim_{self.num_offline_collected_transitions}"
-                y_pred_testing = []
-                x_state = testing_x[0:1]
-                for i in range(testing_x.shape[0]):
-                    y_pred = model.evaluate_sim(
-                        x_state, SpotParams(**spot_learned_params)
-                    )
-                    y_pred_testing.append(y_pred[0])
-                    if i < testing_x.shape[0] - 1:
-                        u_next = testing_u_pre[i + 1 : i + 2]
-                        x_state = jnp.concatenate([y_pred, u_next], axis=1)
-                y_pred_testing = jnp.array(y_pred_testing)
-            elif bnn_model is not None:
-                model = bnn_model
-                model_name = "bnn_model"
-                y_pred_testing = []
-                x_state = testing_x[0:1]
-                for i in range(testing_x.shape[0]):
-                    if self.predict_difference:
-                        delta_x, _ = model.predict(x_state)
-                        # reshape delta_x (a tuple) to match the shape of x_state
-                        print(delta_x.shape)
-                        y_pred = x_state[..., : self.state_dim] + delta_x
-                    else:
-                        y_pred, _ = model.predict(x_state)
-                    y_pred_testing.append(y_pred[0])
-                    if i < testing_x.shape[0] - 1:
-                        u_next = testing_u_pre[i + 1 : i + 2]
-                        x_state = jnp.concatenate([y_pred, u_next], axis=1)
-                y_pred_testing = jnp.array(y_pred_testing)
-            else:
-                raise ValueError(
-                    "Either spot_learned_params or bnn_model has to be provided."
-                )
+            model = bnn_model
+            model_name = "bnn_model"
+            y_pred_testing = []
+            x_state = testing_x[0:1]
+            for i in range(testing_x.shape[0]):
+                if self.predict_difference:
+                    delta_x, _ = model.predict(x_state)
+                    # reshape delta_x (a tuple) to match the shape of x_state
+                    print(delta_x.shape)
+                    y_pred = x_state[..., : self.state_dim] + delta_x
+                else:
+                    y_pred, _ = model.predict(x_state)
+                y_pred_testing.append(y_pred[0])
+                if i < testing_x.shape[0] - 1:
+                    u_next = testing_u_pre[i + 1 : i + 2]
+                    x_state = jnp.concatenate([y_pred, u_next], axis=1)
+            y_pred_testing = jnp.array(y_pred_testing)
+            # else:
+            #     raise ValueError(
+            #         "Either spot_learned_params or bnn_model has to be provided."
+            #     )
 
             y_pred_testing_raw = y_pred_testing
-            if self.include_ee_orientation:
-                y_pred_testing = decode_angles_fn(y_pred_testing, 2)
-                y_pred_testing = decode_angles_fn(y_pred_testing, 12)
-                y_pred_testing = decode_angles_fn(y_pred_testing, 13)
-                y_pred_testing = decode_angles_fn(y_pred_testing, 14)
-            else:
-                y_pred_testing = decode_angles_fn(y_pred_testing, 2)
+            y_pred_testing = decode_angles_spot_fn(y_pred_testing, SPOT_ANGLE_IDX)
 
-            # calculate errors for plotting
-            ee_pos_error_running = jnp.linalg.norm(
-                y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1
-            )
-            ee_pos_error_cumulative = jnp.cumsum(ee_pos_error_running)
-            ee_pos_error_max = jnp.max(ee_pos_error_running)
-            ee_pos_error_total = jnp.sum(ee_pos_error_running)
-            model_errors_max_ee[model_name] = ee_pos_error_max
-            model_errors_total_ee[model_name] = ee_pos_error_total
+            # # calculate errors for plotting
+            # ee_pos_error_running = jnp.linalg.norm(
+            #     y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1
+            # )
+            # ee_pos_error_cumulative = jnp.cumsum(ee_pos_error_running)
+            # ee_pos_error_max = jnp.max(ee_pos_error_running)
+            # ee_pos_error_total = jnp.sum(ee_pos_error_running)
+            # model_errors_max_ee[model_name] = ee_pos_error_max
+            # model_errors_total_ee[model_name] = ee_pos_error_total
 
-            base_pos_error_running = jnp.linalg.norm(
-                y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1
-            )
-            base_pos_error_cumulative = jnp.cumsum(base_pos_error_running)
-            base_pos_error_max = jnp.max(base_pos_error_running)
-            base_pos_error_total = jnp.sum(base_pos_error_running)
-            model_errors_max_base[model_name] = base_pos_error_max
-            model_errors_total_base[model_name] = base_pos_error_total
+            # base_pos_error_running = jnp.linalg.norm(
+            #     y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1
+            # )
+            # base_pos_error_cumulative = jnp.cumsum(base_pos_error_running)
+            # base_pos_error_max = jnp.max(base_pos_error_running)
+            # base_pos_error_total = jnp.sum(base_pos_error_running)
+            # model_errors_max_base[model_name] = base_pos_error_max
+            # model_errors_total_base[model_name] = base_pos_error_total
 
-            base_theta_error_running = jnp.linalg.norm(
-                y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1
-            )
-            base_theta_error_cumulative = jnp.cumsum(base_theta_error_running)
-            base_theta_error_max = jnp.max(base_theta_error_running)
-            base_theta_error_total = jnp.sum(base_theta_error_running)
-            model_errors_max_base_theta[model_name] = base_theta_error_max
-            model_errors_total_base_theta[model_name] = base_theta_error_total
+            # base_theta_error_running = jnp.linalg.norm(
+            #     y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1
+            # )
+            # base_theta_error_cumulative = jnp.cumsum(base_theta_error_running)
+            # base_theta_error_max = jnp.max(base_theta_error_running)
+            # base_theta_error_total = jnp.sum(base_theta_error_running)
+            # model_errors_max_base_theta[model_name] = base_theta_error_max
+            # model_errors_total_base_theta[model_name] = base_theta_error_total
 
-            if self.include_ee_orientation:
-                ee_orient_error_running = jnp.linalg.norm(
-                    y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
-                )
-                ee_orient_error_cumulative = jnp.cumsum(ee_orient_error_running)
-                ee_orient_error_max = jnp.max(ee_orient_error_running)
-                ee_orient_error_total = jnp.sum(ee_orient_error_running)
-                model_errors_max_ee_orient[model_name] = ee_orient_error_max
-                model_errors_total_ee_orient[model_name] = ee_orient_error_total
+            # ee_orient_error_running = jnp.linalg.norm(
+            #     y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
+            # )
+            # ee_orient_error_cumulative = jnp.cumsum(ee_orient_error_running)
+            # ee_orient_error_max = jnp.max(ee_orient_error_running)
+            # ee_orient_error_total = jnp.sum(ee_orient_error_running)
+            # model_errors_max_ee_orient[model_name] = ee_orient_error_max
+            # model_errors_total_ee_orient[model_name] = ee_orient_error_total
 
-            # fill extra evals metrics for current trajectory
-            for state_label in state_labels:
-                state_idx = state_labels.index(state_label)
-                state_error = (
-                    y_pred_testing[:, state_idx] - testing_y[:, state_idx]
-                ) ** 2
-                extra_eval_metrics[f"{state_label}_rmse"] = (
-                    extra_eval_metrics.get(
-                        f"{state_label}_rmse", jnp.zeros(state_error.shape)
-                    )
-                    + state_error
-                )
-            base_pos_error = (
-                jnp.linalg.norm(y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1) ** 2
-            )
-            theta_error = (
-                jnp.linalg.norm(y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1) ** 2
-            )
-            ee_pos_error = (
-                jnp.linalg.norm(y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1) ** 2
-            )
-            extra_eval_metrics["base_pos_rmse"] = (
-                extra_eval_metrics.get("base_pos_rmse", jnp.zeros(base_pos_error.shape))
-                + base_pos_error
-            )
-            extra_eval_metrics["theta_rmse"] = (
-                extra_eval_metrics.get(
-                    "theta_rmse", jnp.zeros(base_theta_error_running.shape)
-                )
-                + theta_error
-            )
-            extra_eval_metrics["ee_pos_rmse"] = (
-                extra_eval_metrics.get("ee_pos_rmse", jnp.zeros(ee_pos_error.shape))
-                + ee_pos_error
-            )
-            if self.include_ee_orientation:
-                ee_orient_error = (
-                    jnp.linalg.norm(
-                        y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
-                    )
-                    ** 2
-                )
-                extra_eval_metrics["ee_orient_rmse"] = (
-                    extra_eval_metrics.get(
-                        "ee_orient_rmse", jnp.zeros(ee_orient_error.shape)
-                    )
-                    + ee_orient_error
-                )
+            # # fill extra evals metrics for current trajectory
+            # for state_label in state_labels:
+            #     state_idx = state_labels.index(state_label)
+            #     state_error = (
+            #         y_pred_testing[:, state_idx] - testing_y[:, state_idx]
+            #     ) ** 2
+            #     extra_eval_metrics[f"{state_label}_rmse"] = (
+            #         extra_eval_metrics.get(
+            #             f"{state_label}_rmse", jnp.zeros(state_error.shape)
+            #         )
+            #         + state_error
+            #     )
+            # base_pos_error = (
+            #     jnp.linalg.norm(y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1) ** 2
+            # )
+            # theta_error = (
+            #     jnp.linalg.norm(y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1) ** 2
+            # )
+            # ee_pos_error = (
+            #     jnp.linalg.norm(y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1) ** 2
+            # )
+            # extra_eval_metrics["base_pos_rmse"] = (
+            #     extra_eval_metrics.get("base_pos_rmse", jnp.zeros(base_pos_error.shape))
+            #     + base_pos_error
+            # )
+            # extra_eval_metrics["theta_rmse"] = (
+            #     extra_eval_metrics.get(
+            #         "theta_rmse", jnp.zeros(base_theta_error_running.shape)
+            #     )
+            #     + theta_error
+            # )
+            # extra_eval_metrics["ee_pos_rmse"] = (
+            #     extra_eval_metrics.get("ee_pos_rmse", jnp.zeros(ee_pos_error.shape))
+            #     + ee_pos_error
+            # )
+            # ee_orient_error = (
+            #     jnp.linalg.norm(
+            #         y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
+            #     )
+            #     ** 2
+            # )
+            # extra_eval_metrics["ee_orient_rmse"] = (
+            #     extra_eval_metrics.get(
+            #         "ee_orient_rmse", jnp.zeros(ee_orient_error.shape)
+            #     )
+            #     + ee_orient_error
+            # )
 
-            # detailed plot of trajectory rollout and errors
+            # # detailed plot of trajectory rollout and errors
             # prepare plots
-            if self.include_ee_orientation:
-                fig, axs = plt.subplots(9, 3, figsize=(30, 15))
-                fig_ee_error, axs_ee_error = plt.subplots(8, 1, figsize=(30, 15))
-                fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
-            else:
-                fig, axs = plt.subplots(6, 2, figsize=(30, 15))
-                fig_ee_error, axs_ee_error = plt.subplots(4, 1, figsize=(30, 15))
-                fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
+            fig, axs = plt.subplots(9, 3, figsize=(30, 15))
+            # fig_ee_error, axs_ee_error = plt.subplots(8, 1, figsize=(30, 15))
+            # fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
 
             # plot true data
             for i in range(6):
                 axs[i, 0].plot(testing_y[:, i], label="true")
-                axs[i, 0].set_title(state_labels[i])
+                axs[i, 0].set_title(SPOT_STATE_LABELS[i])
 
                 if i + 6 < testing_y.shape[-1]:
                     axs[i, 1].plot(testing_y[:, i + 6], label="true")
-                    axs[i, 1].set_title(state_labels[i + 6])
-            
-            for i in range(9):
-                if self.include_ee_orientation:
-                    if i + 13 < testing_y.shape[-1]:
-                        axs[i, 2].plot(testing_y_org_raw[:, i + 13], label="true")
-                        axs[i, 2].set_title(state_labels_encoded[i + 12])
+                    axs[i, 1].set_title(SPOT_STATE_LABELS[i + 6])
 
-            # prepare error plots
-            axs_ee_error[0].set_title("Running ee position error")
-            axs_ee_error[1].set_title("Running cumulative ee position error")
-            axs_ee_error[2].set_title("Max ee position error")
-            axs_ee_error[3].set_title("Total cumulative ee position error")
-            axs_base_error[0, 0].set_title("Running base position error")
-            axs_base_error[1, 0].set_title("Running cumulative base position error")
-            axs_base_error[2, 0].set_title("Max base position error")
-            axs_base_error[3, 0].set_title("Total cumulative base position error")
-            axs_base_error[0, 1].set_title("Running base theta error")
-            axs_base_error[1, 1].set_title("Running cumulative base theta error")
-            axs_base_error[2, 1].set_title("Max base theta error")
-            axs_base_error[3, 1].set_title("Total cumulative base theta error")
-            if self.include_ee_orientation:
-                axs_ee_error[4].set_title("Running ee orientation error")
-                axs_ee_error[5].set_title("Running cumulative ee orientation error")
-                axs_ee_error[6].set_title("Max ee orientation error")
-                axs_ee_error[7].set_title("Total cumulative ee orientation error")
+            for i in range(6):
+                if i + 12 < testing_y.shape[-1]:
+                    axs[i, 2].plot(testing_y[:, i + 12], label="true")
+                    axs[i, 2].set_title(SPOT_STATE_LABELS[i + 12])
+
+            # # prepare error plots
+            # axs_ee_error[0].set_title("Running ee position error")
+            # axs_ee_error[1].set_title("Running cumulative ee position error")
+            # axs_ee_error[2].set_title("Max ee position error")
+            # axs_ee_error[3].set_title("Total cumulative ee position error")
+            # axs_base_error[0, 0].set_title("Running base position error")
+            # axs_base_error[1, 0].set_title("Running cumulative base position error")
+            # axs_base_error[2, 0].set_title("Max base position error")
+            # axs_base_error[3, 0].set_title("Total cumulative base position error")
+            # axs_base_error[0, 1].set_title("Running base theta error")
+            # axs_base_error[1, 1].set_title("Running cumulative base theta error")
+            # axs_base_error[2, 1].set_title("Max base theta error")
+            # axs_base_error[3, 1].set_title("Total cumulative base theta error")
+            # axs_ee_error[4].set_title("Running ee orientation error")
+            # axs_ee_error[5].set_title("Running cumulative ee orientation error")
+            # axs_ee_error[6].set_title("Max ee orientation error")
+            # axs_ee_error[7].set_title("Total cumulative ee orientation error")
 
             # plot simulated trajectory
             for i in range(6):
@@ -1406,144 +1257,137 @@ class RLFromOfflineData:
                         label=f"pred {model_name}",
                         linestyle="--",
                     )
-                
+
             for i in range(9):
-                if self.include_ee_orientation:
-                    if i + 13 < testing_y.shape[-1]:
-                        axs[i, 2].plot(
-                            y_pred_testing[:, i + 13],
-                            label=f"pred {model_name}",
-                            linestyle="--",
-                        )
+                if i + 12 < testing_y.shape[-1]:
+                    axs[i, 2].plot(
+                        y_pred_testing[:, i + 12],
+                        label=f"pred {model_name}",
+                        linestyle="--",
+                    )
 
-            # plot running and cumulative errors
-            axs_ee_error[0].plot(ee_pos_error_running, label=f"{model_name}")
-            axs_ee_error[1].plot(ee_pos_error_cumulative, label=f"{model_name}")
+            # # plot running and cumulative errors
+            # axs_ee_error[0].plot(ee_pos_error_running, label=f"{model_name}")
+            # axs_ee_error[1].plot(ee_pos_error_cumulative, label=f"{model_name}")
 
-            axs_base_error[0, 0].plot(base_pos_error_running, label=f"{model_name}")
-            axs_base_error[1, 0].plot(base_pos_error_cumulative, label=f"{model_name}")
+            # axs_base_error[0, 0].plot(base_pos_error_running, label=f"{model_name}")
+            # axs_base_error[1, 0].plot(base_pos_error_cumulative, label=f"{model_name}")
 
-            axs_base_error[0, 1].plot(base_theta_error_running, label=f"{model_name}")
-            axs_base_error[1, 1].plot(
-                base_theta_error_cumulative, label=f"{model_name}"
-            )
+            # axs_base_error[0, 1].plot(base_theta_error_running, label=f"{model_name}")
+            # axs_base_error[1, 1].plot(
+            #     base_theta_error_cumulative, label=f"{model_name}"
+            # )
 
-            if self.include_ee_orientation:
-                axs_ee_error[4].plot(ee_orient_error_running, label=f"{model_name}")
-                axs_ee_error[5].plot(ee_orient_error_cumulative, label=f"{model_name}")
+            # axs_ee_error[4].plot(ee_orient_error_running, label=f"{model_name}")
+            # axs_ee_error[5].plot(ee_orient_error_cumulative, label=f"{model_name}")
 
-            # plot max and total errors
-            axs_ee_error[2].barh(
-                list(model_errors_max_ee.keys()), list(model_errors_max_ee.values())
-            )
-            axs_ee_error[3].barh(
-                list(model_errors_total_ee.keys()), list(model_errors_total_ee.values())
-            )
-            axs_base_error[2, 0].barh(
-                list(model_errors_max_base.keys()), list(model_errors_max_base.values())
-            )
-            axs_base_error[3, 0].barh(
-                list(model_errors_total_base.keys()),
-                list(model_errors_total_base.values()),
-            )
-            axs_base_error[2, 1].barh(
-                list(model_errors_max_base_theta.keys()),
-                list(model_errors_max_base_theta.values()),
-            )
-            axs_base_error[3, 1].barh(
-                list(model_errors_total_base_theta.keys()),
-                list(model_errors_total_base_theta.values()),
-            )
+            # # plot max and total errors
+            # axs_ee_error[2].barh(
+            #     list(model_errors_max_ee.keys()), list(model_errors_max_ee.values())
+            # )
+            # axs_ee_error[3].barh(
+            #     list(model_errors_total_ee.keys()), list(model_errors_total_ee.values())
+            # )
+            # axs_base_error[2, 0].barh(
+            #     list(model_errors_max_base.keys()), list(model_errors_max_base.values())
+            # )
+            # axs_base_error[3, 0].barh(
+            #     list(model_errors_total_base.keys()),
+            #     list(model_errors_total_base.values()),
+            # )
+            # axs_base_error[2, 1].barh(
+            #     list(model_errors_max_base_theta.keys()),
+            #     list(model_errors_max_base_theta.values()),
+            # )
+            # axs_base_error[3, 1].barh(
+            #     list(model_errors_total_base_theta.keys()),
+            #     list(model_errors_total_base_theta.values()),
+            # )
 
-            if self.include_ee_orientation:
-                axs_ee_error[6].barh(
-                    list(model_errors_max_ee_orient.keys()),
-                    list(model_errors_max_ee_orient.values()),
-                )
-                axs_ee_error[7].barh(
-                    list(model_errors_total_ee_orient.keys()),
-                    list(model_errors_total_ee_orient.values()),
-                )
+            # axs_ee_error[6].barh(
+            #     list(model_errors_max_ee_orient.keys()),
+            #     list(model_errors_max_ee_orient.values()),
+            # )
+            # axs_ee_error[7].barh(
+            #     list(model_errors_total_ee_orient.keys()),
+            #     list(model_errors_total_ee_orient.values()),
+            # )
 
-            for i in range(6):
-                axs[i, 0].legend(fontsize=8)
-                axs[i, 1].legend(fontsize=8)
-                if self.include_ee_orientation:
-                    axs[i, 2].legend(fontsize=8)
+            # for i in range(6):
+            #     axs[i, 0].legend(fontsize=8)
+            #     axs[i, 1].legend(fontsize=8)
+            #     axs[i, 2].legend(fontsize=8)
 
-            for i in range(4):
-                axs_ee_error[i].legend(fontsize=8)
-                axs_base_error[i, 0].legend(fontsize=8)
-                axs_base_error[i, 1].legend(fontsize=8)
-                if self.include_ee_orientation:
-                    axs_ee_error[i + 4].legend(fontsize=8)
+            # for i in range(4):
+            #     axs_ee_error[i].legend(fontsize=8)
+            #     axs_base_error[i, 0].legend(fontsize=8)
+            #     axs_base_error[i, 1].legend(fontsize=8)
+            #     axs_ee_error[i + 4].legend(fontsize=8)
 
             if self.wandb_logging:
                 wandb.log(
                     {
                         f"sys_id_extra_eval/{traj_id}/plot": wandb.Image(fig),
-                        f"sys_id_extra_eval/{traj_id}/ee_error_plot": wandb.Image(
-                            fig_ee_error
-                        ),
-                        f"sys_id_extra_eval/{traj_id}/base_error_plot": wandb.Image(
-                            fig_base_error
-                        ),
+                        # f"sys_id_extra_eval/{traj_id}/ee_error_plot": wandb.Image(
+                        #     fig_ee_error
+                        # ),
+                        # f"sys_id_extra_eval/{traj_id}/base_error_plot": wandb.Image(
+                        #     fig_base_error
+                        # ),
                     }
                 )
 
-        # calculate rmse across all eval trajectories
-        for state_label in state_labels:
-            state_idx = state_labels.index(state_label)
-            extra_eval_metrics[f"{state_label}_rmse"] = jnp.sqrt(
-                extra_eval_metrics[f"{state_label}_rmse"] / len(eval_trajectories)
-            )
-        extra_eval_metrics["base_pos_rmse"] = jnp.sqrt(
-            extra_eval_metrics["base_pos_rmse"] / len(eval_trajectories)
-        )
-        extra_eval_metrics["theta_rmse"] = jnp.sqrt(
-            extra_eval_metrics["theta_rmse"] / len(eval_trajectories)
-        )
-        extra_eval_metrics["ee_pos_rmse"] = jnp.sqrt(
-            extra_eval_metrics["ee_pos_rmse"] / len(eval_trajectories)
-        )
+        # # calculate rmse across all eval trajectories
+        # for state_label in state_labels:
+        #     state_idx = state_labels.index(state_label)
+        #     extra_eval_metrics[f"{state_label}_rmse"] = jnp.sqrt(
+        #         extra_eval_metrics[f"{state_label}_rmse"] / len(eval_trajectories)
+        #     )
+        # extra_eval_metrics["base_pos_rmse"] = jnp.sqrt(
+        #     extra_eval_metrics["base_pos_rmse"] / len(eval_trajectories)
+        # )
+        # extra_eval_metrics["theta_rmse"] = jnp.sqrt(
+        #     extra_eval_metrics["theta_rmse"] / len(eval_trajectories)
+        # )
+        # extra_eval_metrics["ee_pos_rmse"] = jnp.sqrt(
+        #     extra_eval_metrics["ee_pos_rmse"] / len(eval_trajectories)
+        # )
 
-        if self.include_ee_orientation:
-            extra_eval_metrics["ee_orient_rmse"] = jnp.sqrt(
-                extra_eval_metrics["ee_orient_rmse"] / len(eval_trajectories)
-            )
+        # extra_eval_metrics["ee_orient_rmse"] = jnp.sqrt(
+        #     extra_eval_metrics["ee_orient_rmse"] / len(eval_trajectories)
+        # )
 
-        # log extra eval metrics
-        if self.wandb_logging:
-            for step in range(step_range):
-                step_extra_eval_metrics = {
-                    f"sys_id_extra_eval/{state_label}_rmse": float(
-                        extra_eval_metrics[f"{state_label}_rmse"][step]
-                    )
-                    for state_label in state_labels
-                }
-                step_extra_eval_metrics.update(
-                    {
-                        "sys_id_extra_eval/base_pos_rmse": float(
-                            extra_eval_metrics["base_pos_rmse"][step]
-                        ),
-                        "sys_id_extra_eval/theta_rmse": float(
-                            extra_eval_metrics["theta_rmse"][step]
-                        ),
-                        "sys_id_extra_eval/ee_pos_rmse": float(
-                            extra_eval_metrics["ee_pos_rmse"][step]
-                        ),
-                        "sys_id_extra_eval/step": step,
-                    }
-                )
-                if self.include_ee_orientation:
-                    step_extra_eval_metrics.update(
-                        {
-                            "sys_id_extra_eval/ee_orient_rmse": float(
-                                extra_eval_metrics["ee_orient_rmse"][step]
-                            )
-                        }
-                    )
-                wandb.log(step_extra_eval_metrics)
+        # # log extra eval metrics
+        # if self.wandb_logging:
+        #     for step in range(step_range):
+        #         step_extra_eval_metrics = {
+        #             f"sys_id_extra_eval/{state_label}_rmse": float(
+        #                 extra_eval_metrics[f"{state_label}_rmse"][step]
+        #             )
+        #             for state_label in state_labels
+        #         }
+        #         step_extra_eval_metrics.update(
+        #             {
+        #                 "sys_id_extra_eval/base_pos_rmse": float(
+        #                     extra_eval_metrics["base_pos_rmse"][step]
+        #                 ),
+        #                 "sys_id_extra_eval/theta_rmse": float(
+        #                     extra_eval_metrics["theta_rmse"][step]
+        #                 ),
+        #                 "sys_id_extra_eval/ee_pos_rmse": float(
+        #                     extra_eval_metrics["ee_pos_rmse"][step]
+        #                 ),
+        #                 "sys_id_extra_eval/step": step,
+        #             }
+        #         )
+        #         step_extra_eval_metrics.update(
+        #             {
+        #                 "sys_id_extra_eval/ee_orient_rmse": float(
+        #                     extra_eval_metrics["ee_orient_rmse"][step]
+        #                 )
+        #             }
+        #         )
+        #         wandb.log(step_extra_eval_metrics)
 
 
 if __name__ == "__main__":

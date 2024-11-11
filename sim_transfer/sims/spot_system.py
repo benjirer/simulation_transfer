@@ -21,11 +21,21 @@ from mbpo.systems.base_systems import (
 from sim_transfer.sims.dynamics_models import SpotDynamicsModel, SpotParams
 from sim_transfer.sims.envs import SpotEnvReward
 from sim_transfer.sims.util import (
-    encode_angles,
+    encode_angles_spot,
     plot_spot_trajectory,
     sample_pos_and_goal_spot,
 )
 from sim_transfer.sims.simulators import SpotSim
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_LENGTH,
+    SPOT_STATE_LENGTH_ENCODED,
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_DOMAIN_LOWER,
+    SPOT_DOMAIN_UPPER,
+    SPOT_DT,
+    SPOT_ANGLE_IDX,
+)
 
 
 @chex.dataclass
@@ -37,22 +47,33 @@ class SpotDynamicsParams:
 
 class SpotDynamics(Dynamics[SpotDynamicsParams]):
     max_steps: int = 200
-    _dt: float = 1 / 15.0
-    _include_ee_orientation: bool = True
-    _domain_lower = SpotSim._domain_lower
-    _domain_upper = SpotSim._domain_upper
-    if _include_ee_orientation:
-        dim_action: Tuple[int] = (9,)
-        _init_pose: jnp.array = jnp.array(
-            [0.0, 0.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 0.914, 0.05, 0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        )
-        _angle_idx: list = [2, 12, 13, 14]
-    else:
-        dim_action: Tuple[int] = (6,)
-        _init_pose: jnp.array = jnp.array(
-            [0.0, 0.0, -jnp.pi / 2.0, 0.0, 0.0, 0.0, 0.914, 0.05, 0.7, 0.0, 0.0, 0.0]
-        )
-        _angle_idx: int = 2
+    _dt: float = SPOT_DT
+    _domain_lower = SPOT_DOMAIN_LOWER
+    _domain_upper = SPOT_DOMAIN_UPPER
+    dim_action: Tuple[int] = (SPOT_ACTION_LENGTH,)
+    _init_pose: jnp.array = jnp.array(
+        [
+            0.0,
+            0.0,
+            -jnp.pi / 2.0,
+            0.0,
+            0.0,
+            0.0,
+            0.914,
+            0.05,
+            0.7,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    )
+    _angle_idx: list = SPOT_ANGLE_IDX
 
     def __init__(
         self,
@@ -61,8 +82,7 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
         spot_obs_noise_std: jnp.array = None,
         use_obs_noise: bool = True,
         action_delay: float = 0.0,
-        dim_goal: int = 3,
-        include_ee_orientation: bool = True,
+        dim_goal: int = 6,
     ):
         """
         Spot robot simulator environment
@@ -75,21 +95,29 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
             action_delay: whether to delay the action by a certain amount of time (in seconds)
             dim_goal: Dimension of the goal
         """
-        assert self._include_ee_orientation == include_ee_orientation, "Include ee orientation has to be the same"
+        # set dimensions
         self.dim_goal: int = dim_goal
-        if include_ee_orientation:
-            self.dim_state: Tuple[int] = (
-                (22 + dim_goal,) if encode_angle else (18 + dim_goal,)
-            )
-        else:
-            self.dim_state: Tuple[int] = (
-                (13 + dim_goal,) if encode_angle else (12 + dim_goal,)
-            )
-        Dynamics.__init__(self, self.dim_state[0], 6 if include_ee_orientation else 9)
+        self.dim_state: Tuple[int] = (
+            (22 + dim_goal,) if encode_angle else (18 + dim_goal,)
+        )
+
+        # assertions
+        assert (
+            (self.dim_state[0] - self.dim_goal) == SPOT_STATE_LENGTH_ENCODED
+            and encode_angle
+        ) or (
+            (self.dim_state[0] - self.dim_goal) == SPOT_STATE_LENGTH_ENCODED
+            and not encode_angle
+        ), f"State dimension should be {SPOT_STATE_LENGTH} or {SPOT_STATE_LENGTH_ENCODED}, got {self.dim_state[0] + self.dim_goal}"
+        assert (
+            self.dim_goal == SPOT_GOAL_LENGTH
+        ), f"Goal dimension should be {SPOT_GOAL_LENGTH}, got {dim_goal}"
+
+        Dynamics.__init__(self, self.dim_state[0], 9)
         self.encode_angle: bool = encode_angle
 
         # initialize dynamics
-        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=encode_angle, include_ee_orientation=include_ee_orientation)
+        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=encode_angle)
 
         # set default params
         self._set_default_params()
@@ -132,44 +160,33 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
         )
 
     def _set_default_params(self):
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, SPOT_DEFAULT_OBSERVATION_NOISE_STD
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
-        if self._include_ee_orientation:
-            self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
-            self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
-        else:
-            self._default_spot_model_params = SPOT_DEFAULT_PARAMS
-            self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD
+        from sim_transfer.sims.spot_sim_config import (
+            SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION,
+            SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+        )
+
+        self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
+        self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
 
     def _state_to_obs(self, state: jnp.array, rng_key: chex.PRNGKey) -> jnp.array:
         """Adds observation noise to the state"""
-        if self._include_ee_orientation:
-            assert state.shape == (18,), f"State shape is {state.shape} instead of 18"
-        else:
-            assert state.shape == (12,), f"State shape is {state.shape} instead of 12"
+        assert state.shape == (
+            SPOT_STATE_LENGTH,
+        ), f"State shape should be {SPOT_STATE_LENGTH}, got {state.shape}"
+
         # add observation noise
         if self.use_obs_noise:
             obs = state + self._obs_noise_stds * jr.normal(rng_key, shape=state.shape)
         else:
             obs = state
 
+        # encode angles
         if self.encode_angle:
-            if self._include_ee_orientation:
-                indices_in_encoded = [self._angle_idx[0], self._angle_idx[1] + 1, self._angle_idx[2] + 2, self._angle_idx[3] + 3]
-                obs = encode_angles(obs, indices_in_encoded[0])
-                obs = encode_angles(obs, indices_in_encoded[1])
-                obs = encode_angles(obs, indices_in_encoded[2])
-                obs = encode_angles(obs, indices_in_encoded[3])
-            else:
-                obs = encode_angles(obs, self._angle_idx)
-        if self._include_ee_orientation:
-            assert (obs.shape[-1] == 22 and self.encode_angle) or (
-                obs.shape[-1] == 18 and not self.encode_angle
-            )
-        else:
-            assert (obs.shape[-1] == 13 and self.encode_angle) or (
-                obs.shape[-1] == 12 and not self.encode_angle
-            )
+            obs = encode_angles_spot(obs, self._angle_idx)
+
+        assert (obs.shape[-1] == SPOT_STATE_LENGTH_ENCODED and self.encode_angle) or (
+            obs.shape[-1] == SPOT_STATE_LENGTH and not self.encode_angle
+        )
         return obs
 
     def next_state(
@@ -179,12 +196,12 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
 
         # split into robot state and goal
         if self.encode_angle:
-            state_idx = 13 if not self._include_ee_orientation else 22
+            state_idx = SPOT_STATE_LENGTH_ENCODED
             x_state = x[:state_idx]
             x_goal = x[state_idx : state_idx + self.dim_goal]
             frame_stack = x[state_idx + self.dim_goal :]
         else:
-            state_idx = 12 if not self._include_ee_orientation else 18
+            state_idx = SPOT_STATE_LENGTH
             x_state = x[:state_idx]
             x_goal = x[state_idx : state_idx + self.dim_goal]
             frame_stack = x[state_idx + self.dim_goal :]
@@ -237,7 +254,6 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
             rng_key=reset_key,
             domain_lower=self._domain_lower,
             domain_upper=self._domain_upper,
-            include_ee_orientation=self._include_ee_orientation,
         )
 
         return jnp.concatenate([self._state_to_obs(init_state, rng_key=key_obs), goal])
@@ -257,24 +273,30 @@ class SpotReward(Reward[SpotRewardParams]):
         bound: float = 0.1,
         margin_factor: float = 10.0,
         num_frame_stack: int = 0,
-        dim_goal: int = 3,
-        include_ee_orientation: bool = True,
-    ):  
-        if include_ee_orientation:
-            assert dim_goal == 6, "Dimension of the goal should be 6"
-            Reward.__init__(
-                self, x_dim=22 + dim_goal if encode_angle else 18 + dim_goal, u_dim=9
-            )
-        else:
-            Reward.__init__(
-                self, x_dim=13 + dim_goal if encode_angle else 12 + dim_goal, u_dim=6
-            )
+        dim_goal: int = 6,
+    ):
+        # assertions
+        assert (
+            dim_goal == SPOT_GOAL_LENGTH
+        ), f"Dimension of the goal should be {SPOT_GOAL_LENGTH}, got {dim_goal}"
+        dim_state = 22 if not encode_angle else 18
+        assert (dim_state == SPOT_STATE_LENGTH and encode_angle) or (
+            dim_state == SPOT_STATE_LENGTH_ENCODED and not encode_angle
+        ), f"Expected state dimension {SPOT_STATE_LENGTH} or {SPOT_STATE_LENGTH_ENCODED} but got {dim_state}"
+
+        # setup reward
+        Reward.__init__(
+            self,
+            x_dim=dim_state + dim_goal,
+            u_dim=9,
+        )
+
+        # set reward model
         self.ctrl_cost_weight = ctrl_cost_weight
         self.ctrl_diff_weight = ctrl_diff_weight
         self.encode_angle: bool = encode_angle
         self.num_frame_stack = num_frame_stack
         self.dim_goal = dim_goal
-        self.include_ee_orientation = include_ee_orientation
         self._reward_model = SpotEnvReward(
             ctrl_cost_weight=ctrl_cost_weight,
             encode_angle=self.encode_angle,
@@ -311,12 +333,9 @@ class SpotReward(Reward[SpotRewardParams]):
 
         # cost for control input change
         if self.num_frame_stack > 0:
-            u_prev = actions_stacked[-self.u_dim :]          
+            u_prev = actions_stacked[-self.u_dim :]
             u_base_penalty = self.ctrl_diff_weight * jnp.sum((u[:3] - u_prev[:3]) ** 2)
-            if self.include_ee_orientation:
-                u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:9] - u_prev[3:9]) ** 2)
-            else:
-                u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:6] - u_prev[3:6]) ** 2)
+            u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:9] - u_prev[3:9]) ** 2)
             reward -= 2.0 * u_base_penalty + 0.5 * u_ee_penalty
         return Normal(reward, jnp.zeros_like(reward)), reward_params
 
@@ -419,13 +438,12 @@ class SpotSystem(System[SpotDynamicsParams, SpotRewardParams]):
         use_obs_noise: bool = True,
         bound: float = 0.1,
         margin_factor: float = 10.0,
-        dim_goal: int = 3,
-        dim_goal_with_ee: int = 6,
-        include_ee_orientation: bool = True,
-    ):  
-        self.include_ee_orientation = include_ee_orientation
-        if self.include_ee_orientation:
-            self.dim_goal = dim_goal_with_ee
+        dim_goal: int = 6,
+    ):
+        assert (
+            dim_goal == SPOT_GOAL_LENGTH
+        ), f"Dimension of the goal should be {SPOT_GOAL_LENGTH}, got {dim_goal}"
+        self.dim_goal = dim_goal
         System.__init__(
             self,
             dynamics=SpotDynamics(
@@ -434,7 +452,6 @@ class SpotSystem(System[SpotDynamicsParams, SpotRewardParams]):
                 spot_obs_noise_std=spot_obs_noise_std,
                 use_obs_noise=use_obs_noise,
                 dim_goal=self.dim_goal,
-                include_ee_orientation=self.include_ee_orientation,
             ),
             reward=SpotReward(
                 ctrl_cost_weight=ctrl_cost_weight,
@@ -443,7 +460,6 @@ class SpotSystem(System[SpotDynamicsParams, SpotRewardParams]):
                 bound=bound,
                 margin_factor=margin_factor,
                 dim_goal=self.dim_goal,
-                include_ee_orientation=self.include_ee_orientation,
             ),
         )
 

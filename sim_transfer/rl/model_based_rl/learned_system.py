@@ -10,6 +10,7 @@ from mbpo.systems.dynamics.base_dynamics import Dynamics
 from sim_transfer.models.abstract_model import BatchedNeuralNetworkModel
 from sim_transfer.sims.car_system import CarReward, CarRewardParams, SystemState
 from sim_transfer.sims.spot_system import SpotReward, SpotRewardParams
+from sim_transfer.sims.spot_sim_config import SPOT_STATE_LENGTH, SPOT_ACTION_LENGTH, SPOT_GOAL_LENGTH, SPOT_ANGLE_IDX
 
 
 @chex.dataclass
@@ -139,11 +140,9 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         include_noise: bool = True,
         predict_difference: bool = True,
         num_frame_stack: int = 0,
-        dim_goal: int = 3,
-        include_ee_orientation: bool = True,
+        dim_goal: int = SPOT_GOAL_LENGTH,
     ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
-        self.include_ee_orientation = include_ee_orientation
         self.model = model
         self.include_noise = include_noise
         self.predict_difference = predict_difference
@@ -154,11 +153,8 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         self._x_dim_no_goal = self._x_dim - self._dim_goal
 
         assert (
-            self._dim_goal == 3
-            and not self.include_ee_orientation
-            or self._dim_goal == 6
-            and self.include_ee_orientation
-        ), "dim_goal must be 3 if not include_ee_orientation and 6 if include_ee_orientation"
+            self._dim_goal == SPOT_GOAL_LENGTH
+        ), f"dim_goal must be {SPOT_GOAL_LENGTH}, got {self._dim_goal}"
 
     def next_state(
         self, x_raw: chex.Array, u: chex.Array, dynamics_params: DynamicsParams
@@ -166,14 +162,6 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         assert x_raw.shape == (
             self._x_dim + self._u_dim * self.num_frame_stack,
         ) and u.shape == (self._u_dim,)
-
-        # # print dims
-        # print("self.x_dim", self.x_dim)
-        # print("self._x_dim", self._x_dim)
-        # print("self._u_dim", self._u_dim)
-        # print("self.num_frame_stack", self.num_frame_stack)
-        # print("self._dim_goal", self._dim_goal)
-        # print("self._x_dim_no_goal", self._x_dim_no_goal)
 
         # remove goal from state
         print("x_raw shape", x_raw.shape)
@@ -233,12 +221,11 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
         include_noise: bool,
         predict_difference: bool,
         num_frame_stack: int = 0,
-        include_ee_orientation: bool = True,
         **spot_reward_kwargs: dict
     ):
-        dim_goal = 3 if not include_ee_orientation else 6
+        dim_goal = SPOT_GOAL_LENGTH
         reward = SpotReward(
-            **spot_reward_kwargs, num_frame_stack=num_frame_stack, dim_goal=dim_goal, include_ee_orientation=include_ee_orientation
+            **spot_reward_kwargs, num_frame_stack=num_frame_stack, dim_goal=dim_goal
         )
         dynamics = LearnedSpotDynamics(
             x_dim=reward.x_dim + num_frame_stack * reward.u_dim,
@@ -248,7 +235,6 @@ class LearnedSpotSystem(System[DynamicsParams, SpotRewardParams]):
             include_noise=include_noise,
             predict_difference=predict_difference,
             num_frame_stack=num_frame_stack,
-            include_ee_orientation=include_ee_orientation,
         )
         System.__init__(self, dynamics=dynamics, reward=reward)
         self.num_frame_stack = num_frame_stack

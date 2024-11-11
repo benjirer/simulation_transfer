@@ -23,7 +23,12 @@ from sim_transfer.sims.dynamics_models import (
     SpotParams,
     SpotDynamicsModel,
 )
-from sim_transfer.sims.util import encode_angles, decode_angles
+from sim_transfer.sims.util import (
+    encode_angles,
+    decode_angles,
+    encode_angles_spot,
+    decode_angles_spot,
+)
 
 
 class FunctionSimulator:
@@ -1943,7 +1948,9 @@ class StackedActionSimWrapper(FunctionSimulator):
                 lower=self._expand_vector(base_domain._lower),
                 upper=self._expand_vector(base_domain._upper),
             )
-            assert new_domain.num_dims == self.input_size
+            assert (
+                new_domain.num_dims == self.input_size
+            ), f"{new_domain.num_dims} != {self.input_size}"
             return new_domain
         elif isinstance(base_domain, HypercubeDomain):
             new_domain = HypercubeDomain(
@@ -2003,156 +2010,28 @@ class StackedActionSimWrapper(FunctionSimulator):
         return fun_vals
 
 
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_MASK,
+    SPOT_ACTION_MASK,
+    SPOT_GOAL_MASK,
+    SPOT_STATE_LENGTH,
+    SPOT_STATE_LENGTH_ENCODED,
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_ANGLE_IDX,
+    SPOT_DT,
+    SPOT_DOMAIN_LOWER,
+    SPOT_DOMAIN_UPPER,
+)
+
+
 class SpotSim(FunctionSimulator):
-    _dt: float = 1 / 15.0
-    _include_ee_orientation: bool = True
-    if _include_ee_orientation:
-        _angle_idx: list = [2, 12, 13, 14]
-    else:
-        _angle_idx: int = 2
+    _dt: float = SPOT_DT
+    _angle_idx: list = SPOT_ANGLE_IDX
 
     # domain for simulator prior
-    _domain_lower_no_ee = jnp.array(
-        [
-            # base pos
-            -2.5,
-            -2.5,
-            -jnp.pi,
-            # base vel
-            -1.6,
-            -1.6,
-            -1.5,
-            # ee pos
-            -2.5,
-            -2.5,
-            0.1,
-            # ee vel
-            -5.0,
-            -5.0,
-            -5.0,
-            # base action
-            -1.6,
-            -1.6,
-            -1.5,
-            # ee action
-            -5.0,
-            -5.0,
-            -5.0,
-        ]
-    )
-    _domain_upper_no_ee = jnp.array(
-        [
-            # base pos
-            4.5,
-            2.5,
-            jnp.pi,
-            # base vel
-            1.6,
-            1.6,
-            1.5,
-            # ee pos
-            4.5,
-            2.5,
-            1.8,
-            # ee vel
-            5.0,
-            5.0,
-            5.0,
-            # base action
-            1.6,
-            1.6,
-            1.5,
-            # ee action
-            5.0,
-            5.0,
-            5.0,
-        ]
-    )
-
-    _domain_lower_with_ee = jnp.array(
-        [
-            # base pos
-            -2.5,
-            -2.5,
-            -jnp.pi,
-            # base vel
-            -1.6,
-            -1.6,
-            -1.5,
-            # ee pos
-            -2.5,
-            -2.5,
-            0.1,
-            # ee vel
-            -5.0,
-            -5.0,
-            -5.0,
-            # ee orientation
-            -jnp.pi,
-            -jnp.pi,
-            -jnp.pi,
-            # ee angular vel
-            -2.5,
-            -2.5,
-            -2.5,
-            # base action
-            -1.6,
-            -1.6,
-            -1.5,
-            # ee action
-            -5.0,
-            -5.0,
-            -5.0,
-            # ee angular action
-            -2.5,
-            -2.5,
-            -2.5,
-        ]
-    )
-
-    _domain_upper_with_ee = jnp.array(
-        [
-            # base pos
-            4.5,
-            2.5,
-            jnp.pi,
-            # base vel
-            1.6,
-            1.6,
-            1.5,
-            # ee pos
-            4.5,
-            2.5,
-            1.8,
-            # ee vel
-            5.0,
-            5.0,
-            5.0,
-            # ee orientation
-            jnp.pi,
-            jnp.pi,
-            jnp.pi,
-            # ee angular vel
-            2.5,
-            2.5,
-            2.5,
-            # base action
-            1.6,
-            1.6,
-            1.5,
-            # ee action
-            5.0,
-            5.0,
-            5.0,
-            # ee angular action
-            2.5,
-            2.5,
-            2.5,
-        ]
-    )
-    
-    _domain_lower = _domain_lower_no_ee if not _include_ee_orientation else _domain_lower_with_ee
-    _domain_upper = _domain_upper_no_ee if not _include_ee_orientation else _domain_upper_with_ee
+    _domain_lower = SPOT_DOMAIN_LOWER
+    _domain_upper = SPOT_DOMAIN_UPPER
 
     # domain for generating data
     _domain_lower_dataset = _domain_lower
@@ -2168,17 +2047,21 @@ class SpotSim(FunctionSimulator):
 
         Args:
             encode_angle: (bool) whether to encode the heading angle (theta) as sin(theta) and cos(theta)
+            spot_model_params: (dict) parameters for the spot model (if None, default params are used)
         """
-        if self._include_ee_orientation:
-            _output_size = 22 if encode_angle else 18
-            FunctionSimulator.__init__(
-                self, input_size=31 if encode_angle else 27, output_size=_output_size
-            )
-        else:
-            _output_size = 13 if encode_angle else 12
-            FunctionSimulator.__init__(
-                self, input_size=19 if encode_angle else 18, output_size=_output_size
-            )
+        # setup dims and function simulator
+        _output_size = 22 if encode_angle else 18
+        assert (
+            _output_size == SPOT_STATE_LENGTH_ENCODED
+            if encode_angle
+            else SPOT_STATE_LENGTH
+        )
+        self.state_action_split_idx = _output_size
+        FunctionSimulator.__init__(
+            self,
+            input_size=31 if encode_angle else 27,
+            output_size=_output_size,
+        )
 
         # set default params
         self._set_default_params()
@@ -2193,11 +2076,7 @@ class SpotSim(FunctionSimulator):
 
         # set model
         self.encode_angle = encode_angle
-        self.model = SpotDynamicsModel(self._dt, encode_angle=encode_angle, include_ee_orientation=self._include_ee_orientation)
-        if self._include_ee_orientation:
-            self.state_action_split_idx = 22 if encode_angle else 18
-        else:
-            self.state_action_split_idx = 13 if encode_angle else 12
+        self.model = SpotDynamicsModel(self._dt, encode_angle=encode_angle)
 
         # set parameter bounds
         _bounds_spot_model_params = self._bounds_spot_model_params
@@ -2280,45 +2159,33 @@ class SpotSim(FunctionSimulator):
     @property
     def normalization_stats(self) -> Dict[str, jnp.ndarray]:
         from sim_transfer.sims.spot_sim_config import (
-            SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE,
-            SPOT_MODEL_NORMALIZATION_STATS,
             SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE,
             SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION,
         )
 
         if self.encode_angle:
-            if self._include_ee_orientation:
-                stats = {
-                    "x_mean": jnp.zeros(self.input_size),
-                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE["x_std"],
-                    "y_mean": jnp.zeros(self.output_size),
-                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE["y_std"],
-                }
-            else:
-                stats = {
-                    "x_mean": jnp.zeros(self.input_size),
-                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["x_std"],
-                    "y_mean": jnp.zeros(self.output_size),
-                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["y_std"],
-                }
+            x_std = SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE[
+                "x_std"
+            ]
+            y_std = SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE[
+                "y_std"
+            ]
+            stats = {
+                "x_mean": jnp.zeros(self.input_size),
+                "x_std": x_std,
+                "y_mean": jnp.zeros(self.output_size),
+                "y_std": y_std,
+            }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
             ), "std and mean should have same shape"
         else:
-            if self._include_ee_orientation:
-                stats = {
-                    "x_mean": jnp.zeros(self.input_size),
-                    "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["x_std"],
-                    "y_mean": jnp.zeros(self.output_size),
-                    "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["y_std"],
-                }
-            else:
-                stats = {
-                    "x_mean": jnp.zeros(self.input_size),
-                    "x_std": SPOT_MODEL_NORMALIZATION_STATS["x_std"],
-                    "y_mean": jnp.zeros(self.output_size),
-                    "y_std": SPOT_MODEL_NORMALIZATION_STATS["y_std"],
-                }
+            stats = {
+                "x_mean": jnp.zeros(self.input_size),
+                "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["x_std"],
+                "y_mean": jnp.zeros(self.output_size),
+                "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["y_std"],
+            }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
             ), "std and mean should have same shape"
@@ -2350,25 +2217,11 @@ class SpotSim(FunctionSimulator):
         rng_key: jax.random.PRNGKey,
     ) -> jnp.ndarray:
         if self.encode_angle:
-            if self._include_ee_orientation:
-                indices_in_encoded = [self._angle_idx[0], self._angle_idx[1] + 1, self._angle_idx[2] + 2, self._angle_idx[3] + 3]
-                f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx[0])
-                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[1])
-                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[2])
-                f_decoded = decode_angles(f_decoded, angle_idx=self._angle_idx[3])
-                y = f_decoded + obs_noise_std * jax.random.normal(
-                    rng_key, shape=f_decoded.shape
-                )
-                y = encode_angles(y, angle_idx=indices_in_encoded[0])
-                y = encode_angles(y, angle_idx=indices_in_encoded[1])
-                y = encode_angles(y, angle_idx=indices_in_encoded[2])
-                y = encode_angles(y, angle_idx=indices_in_encoded[3])
-            else:
-                f_decoded = decode_angles(f_vals, angle_idx=self._angle_idx)
-                y = f_decoded + obs_noise_std * jax.random.normal(
-                    rng_key, shape=f_decoded.shape
-                )
-                y = encode_angles(y, angle_idx=self._angle_idx)
+            f_decoded = decode_angles_spot(f_vals, angle_idx=self._angle_idx)
+            y = f_decoded + obs_noise_std * jax.random.normal(
+                rng_key, shape=f_decoded.shape
+            )
+            y = encode_angles_spot(y, angle_idx=self._angle_idx)
         else:
             y = f_vals + obs_noise_std * jax.random.normal(rng_key, shape=f_vals.shape)
         assert f_vals.shape == y.shape
@@ -2396,26 +2249,20 @@ class SpotSim(FunctionSimulator):
     def _create_domain(self, lower: jnp.array, upper: jnp.array) -> Domain:
         """Creates the domain object from the given lower and up bounds."""
         if self.encode_angle:
-            if self._include_ee_orientation:
-                return HypercubeDomainWithAngles(
-                    angle_indices=self._angle_idx, lower=lower, upper=upper
-                )
-            else:
-                return HypercubeDomainWithAngles(
-                    angle_indices=[self._angle_idx], lower=lower, upper=upper
-                )
+            return HypercubeDomainWithAngles(
+                angle_indices=self._angle_idx, lower=lower, upper=upper
+            )
         else:
             return HypercubeDomain(lower=lower, upper=upper)
-        
+
     def _set_default_params(self):
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, bounds_spot_model_params
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, bounds_spot_model_params_with_ee_orientation
-        if self._include_ee_orientation:
-            self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
-            self._bounds_spot_model_params = bounds_spot_model_params_with_ee_orientation
-        else:
-            self._default_spot_model_params = SPOT_DEFAULT_PARAMS
-            self._bounds_spot_model_params = bounds_spot_model_params
+        from sim_transfer.sims.spot_sim_config import (
+            SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION,
+            BOUNDS_SPOT_MODEL_PARAMS_WITH_EE_ORIENTATION,
+        )
+
+        self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
+        self._bounds_spot_model_params = BOUNDS_SPOT_MODEL_PARAMS_WITH_EE_ORIENTATION
 
 
 if __name__ == "__main__":

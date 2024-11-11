@@ -11,10 +11,26 @@ from brax.training.types import Transition
 
 from experiments.util import load_csv_recordings
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
-from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_DEFAULT_OBSERVATION_NOISE_STD,
+    SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+)
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_MASK,
+    SPOT_ACTION_MASK,
+    SPOT_GOAL_MASK,
+    SPOT_STATE_LENGTH,
+    SPOT_STATE_LENGTH_ENCODED,
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_ANGLE_IDX,
+)
 from sim_transfer.sims.simulators import StackedActionSimWrapper
 from sim_transfer.sims.util import encode_angles as encode_angles_fn
 from sim_transfer.sims.util import decode_angles as decode_angles_fn
+from sim_transfer.sims.util import encode_angles_spot as encode_angles_spot_fn
+from sim_transfer.sims.util import decode_angles_spot as decode_angles_spot_fn
+from sim_transfer.sims.util import plot_spot_state
 
 
 DATA_DIR = os.path.join(
@@ -71,15 +87,6 @@ _RACECAR_NOISE_STD_ENCODED = 20 * jnp.concatenate(
         DEFAULTS_RACECAR["obs_noise_std"][3:],
     ]
 )
-
-# _SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate(
-#     [
-#         DEFAULTS_SPOT["obs_noise_std"][:2],
-#         DEFAULTS_SPOT["obs_noise_std"][2:3],
-#         DEFAULTS_SPOT["obs_noise_std"][2:3],
-#         DEFAULTS_SPOT["obs_noise_std"][3:],
-#     ]
-# )
 
 _SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate(
     [
@@ -379,307 +386,141 @@ def _load_spot_datasets(file_path: Union[str, List[str]]):
     return dataset
 
 
-def delay_and_stack_spot_actions(
+def stack_spot_actions(
     u: jnp.array,
     num_stacked_actions: int = 0,
-    action_delay_base: int = 0,
-    action_delay_ee: int = 0,
-    action_dim_base: int = 3,
-    action_dim_ee: int = 3,
+    action_dim: int = SPOT_ACTION_LENGTH,
 ) -> jnp.array:
-    """Delay and stack the actions for the spot robot"""
+    """Stack the actions for the spot robot"""
     assert (
-        u.shape[-1] == action_dim_base + action_dim_ee
-    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match given dims {action_dim_base + action_dim_ee}"
-    assert action_delay_base >= 0 and action_delay_ee >= 0, "Action delay must be >= 0"
-    assert not (
-        num_stacked_actions > 0 and (action_delay_base > 0 or action_delay_ee > 0)
-    ), "Can't use action stacking and action delay at the same time"
+        u.shape[-1] == action_dim
+    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match given dims {action_dim}"
 
-    # action stacking
     if num_stacked_actions > 0:
         print(
             f"[data_provider] Using action stacking with stacked actions: {num_stacked_actions}",
         )
 
+        # pad to account for the first actions (set to 0)
         u_padded = jnp.pad(u, ((num_stacked_actions, 0), (0, 0)), mode="constant")
+
+        # arrange indices for stacking
         indices = (
             jnp.arange(u.shape[0])[:, None]
             + jnp.arange(-num_stacked_actions, 1)[None, :]
             + num_stacked_actions
         )
+
+        # stack actions
         u_stacked = u_padded[indices].reshape(u.shape[0], -1)
-        assert u_stacked.shape == (
-            u.shape[0],
-            (action_dim_base + action_dim_ee) * (num_stacked_actions + 1),
-        ), f"Something went wrong with the action stacking, expected shape {u.shape[0], (action_dim_base + action_dim_ee) * (num_stacked_actions + 1)} but got {u_stacked.shape}"
-        u = u_stacked
-
-    # only action delay
-    elif action_delay_base > 0 or action_delay_ee > 0:
-        u_base, u_ee = u[:, :action_dim_base], u[:, action_dim_base:]
-        print(
-            f"[data_provider] Using action delay with base action delay: {action_delay_base} and ee action delay: {action_delay_ee}",
-        )
-
-        if action_delay_base > 0:
-            u_delayed_start = jnp.zeros_like(u_base[:action_delay_base])
-            u_delayed_base = jnp.concatenate(
-                [u_delayed_start, u_base[:-action_delay_base]]
-            )
-            assert (
-                u_delayed_base.shape == u_base.shape
-            ), "Something went wrong with the base action delay"
-            u_base = u_delayed_base
-
-        if action_delay_ee > 0:
-            u_delayed_start = jnp.zeros_like(u_ee[:action_delay_ee])
-            u_delayed_ee = jnp.concatenate([u_delayed_start, u_ee[:-action_delay_ee]])
-            assert (
-                u_delayed_ee.shape == u_ee.shape
-            ), "Something went wrong with the ee action delay"
-            u_ee = u_delayed_ee
-        u = jnp.concatenate([u_base, u_ee], axis=-1)
-
-    return u
+    else:
+        u_stacked = u
+        
+    assert u_stacked.shape == (
+        u.shape[0],
+        action_dim * (num_stacked_actions + 1),
+    ), f"Expected stacked u shape {u.shape[0], action_dim * (num_stacked_actions + 1)} but got {u_stacked.shape}"
+    return u_stacked
 
 
 def _prepare_spot_datasets(
-    dataset_pre: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    dataset_pre: List[Transition],
     encode_angles: bool = False,
     skip_first_n: int = 30,
-    action_delay_base: int = 0,
-    action_delay_ee: int = 0,
     num_stacked_actions: int = 0,
-    angle_idx: Union[int, List[int]] = 2,
+    angle_idx: Union[int, List[int]] = SPOT_ANGLE_IDX,
     add_goal: bool = False,
-    include_ee_orientation: bool = True,
+    action_dim: int = SPOT_ACTION_LENGTH,
 ):
     # unpack dataset
     x = jnp.array([d.observation for d in dataset_pre])
     u = jnp.array([d.action for d in dataset_pre])
-    y = jnp.array([d.next_observation for d in dataset_pre])    
+    y = jnp.array([d.next_observation for d in dataset_pre])
 
     assert (
-        x.shape[-1] == 22
-    ), f"Invalid state dimensions, x shape {x.shape[-1]} doesn't match 22"
+        x.shape[-1] == SPOT_STATE_LENGTH_ENCODED
+    ), f"Invalid state dimensions, x shape {x.shape[-1]} doesn't match {SPOT_STATE_LENGTH_ENCODED}"
     assert (
-        u.shape[-1] == 9
-    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match 9"
+        u.shape[-1] == SPOT_ACTION_LENGTH
+    ), f"Invalid action dimensions, u shape {u.shape[-1]} doesn't match {SPOT_ACTION_LENGTH}"
     assert (
-        y.shape[-1] == 22
-    ), f"Invalid state dimensions, y shape {y.shape[-1]} doesn't match 22"
+        y.shape[-1] == SPOT_STATE_LENGTH_ENCODED
+    ), f"Invalid state dimensions, y shape {y.shape[-1]} doesn't match {SPOT_STATE_LENGTH_ENCODED}"
 
-    # plot first 100 x,y and u and save plots to file
-    state_labels = [
-        'base_x',
-        'base_y',
-        'sin_base_theta',
-        'cos_base_theta',
-        'base_vx',
-        'base_vy',
-        'base_vtheta',
-        'ee_x',
-        'ee_y',
-        'ee_z',
-        'ee_vx',
-        'ee_vy',
-        'ee_vz',
-        'sin_ee_rx',
-        'cos_ee_rx',
-        'sin_ee_ry',
-        'cos_ee_ry',
-        'sin_ee_rz',
-        'cos_ee_rz',
-        'ee_vrx',
-        'ee_vry',
-        'ee_vrz'
-    ]
+    # plot
+    plot_spot_state(x, y, u, encode_angle=encode_angles, file_name="state_plot_raw.png")
 
-    action_labels = [
-        'base_vx',
-        'base_vy',
-        'base_vtheta',
-        'ee_vx',
-        'ee_vy',
-        'ee_vz',
-        'ee_vrx',
-        'ee_vry',
-        'ee_vrz'
-    ]
-    x_plot = x[:100]
-    y_plot = y[:100]
-    u_plot = u[:100]
-    import matplotlib.pyplot as plt
-    n_rows = len(state_labels)
-    n_cols = 3
-    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
-
-    for i in range(n_rows):
-        for j in range(n_cols-1):
-            axs[i, j].plot(x_plot[:, i], label='x')
-            axs[i, j].plot(y_plot[:, i], label='y')
-            axs[i, j].set_title(state_labels[i])
-            axs[i, j].legend()
-    
-    # plot actions
-    for i in range(len(action_labels)):
-        axs[i, 2].plot(u_plot[:, i], label='u')
-        axs[i, 2].set_title(action_labels[i])
-        axs[i, 2].legend()
-
-    plt.savefig('state_plot.png')
-
-    # angles are already encoded in the dataset, let's decode them and cast into [-\pi, \pi] 
-    if include_ee_orientation:
-        x = decode_angles_fn(x, angle_idx=angle_idx[0])
-        y = decode_angles_fn(y, angle_idx=angle_idx[0])
-
-        x = decode_angles_fn(x, angle_idx=angle_idx[1])
-        y = decode_angles_fn(y, angle_idx=angle_idx[1])
-
-        x = decode_angles_fn(x, angle_idx=angle_idx[2])
-        y = decode_angles_fn(y, angle_idx=angle_idx[2])
-    
-        x = decode_angles_fn(x, angle_idx=angle_idx[3])
-        y = decode_angles_fn(y, angle_idx=angle_idx[3])
-        x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-    else:
-        x = decode_angles_fn(x, angle_idx=angle_idx)
-        y = decode_angles_fn(y, angle_idx=angle_idx)
-        x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
+    # angles are already encoded in the dataset, let's decode them
+    x = decode_angles_spot_fn(x, angle_idx=angle_idx)
+    y = decode_angles_spot_fn(y, angle_idx=angle_idx)
 
     # save raw y for goal addition
     y_raw = copy.deepcopy(y)
 
-    # action stacking and action delay
-    # note: we can can't split action delay if we use action stacking
-    u = delay_and_stack_spot_actions(
+    # action stacking
+    u = stack_spot_actions(
         u=u,
         num_stacked_actions=num_stacked_actions,
-        action_delay_base=action_delay_base,
-        action_delay_ee=action_delay_ee,
-        action_dim_ee=6 if include_ee_orientation else 3,
     )
 
-    # project angles into [-\pi, \pi] and encode angles
-    if include_ee_orientation:
-        x = x.at[:, angle_idx[0]].set((x[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[0]].set((y[:, angle_idx[0]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[1]].set((x[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[1]].set((y[:, angle_idx[1]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[2]].set((x[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[2]].set((y[:, angle_idx[2]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-
-        x = x.at[:, angle_idx[3]].set((x[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx[3]].set((y[:, angle_idx[3]] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        if encode_angles:
-            indices_in_encoded = [angle_idx[0], angle_idx[1]+1, angle_idx[2]+2, angle_idx[3]+3]
-            x = encode_angles_fn(x, angle_idx=indices_in_encoded[0])
-            y = encode_angles_fn(y, angle_idx=indices_in_encoded[0])
-
-            x = encode_angles_fn(x, angle_idx=indices_in_encoded[1])
-            y = encode_angles_fn(y, angle_idx=indices_in_encoded[1])
-
-            x = encode_angles_fn(x, angle_idx=indices_in_encoded[2])
-            y = encode_angles_fn(y, angle_idx=indices_in_encoded[2])
-            
-            x = encode_angles_fn(x, angle_idx=indices_in_encoded[3])
-            y = encode_angles_fn(y, angle_idx=indices_in_encoded[3])
-    else:
-        x = x.at[:, angle_idx].set((x[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        y = y.at[:, angle_idx].set((y[:, angle_idx] + jnp.pi) % (2 * jnp.pi) - jnp.pi)
-        if encode_angles:
-            x = encode_angles_fn(x, angle_idx=angle_idx)
-            y = encode_angles_fn(y, angle_idx=angle_idx)
+    # encode angles
+    if encode_angles:
+        x = encode_angles_spot_fn(x, angle_idx=angle_idx)
+        y = encode_angles_spot_fn(y, angle_idx=angle_idx)
 
     # remove first n steps (since often not much is happening)
-    x, u, y = x[skip_first_n:], u[skip_first_n:], y[skip_first_n:]
-    y_raw = y_raw[skip_first_n:]
-
-    # plot again
-    x_plot = x[:100]
-    y_plot = y[:100]
-    u_plot = u[:100]
-
-    # get second size of u
-    len_u = u.shape[1]
-    amount_of_actions = len_u // 9
-
-    n_rows = len(state_labels)
-    n_cols = 3
-
-    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
-
-    for i in range(n_rows):
-        for j in range(n_cols-1):
-            axs[i, j].plot(x_plot[:, i], label='x')
-            axs[i, j].plot(y_plot[:, i], label='y')
-            axs[i, j].set_title(state_labels[i])
-            axs[i, j].legend()
-
-    # plot actions
-    for i in range(9):
-        for j in range(amount_of_actions):
-            axs[i, 2].plot(u_plot[:, i + j * 9], label='u')
-            axs[i, 2].set_title(action_labels[i])
-            axs[i, 2].legend()
-
-    plt.savefig('state_plot_after.png')
-
-
+    x, u, y, y_raw = (
+        x[skip_first_n:],
+        u[skip_first_n:],
+        y[skip_first_n:],
+        y_raw[skip_first_n:],
+    )
 
     if add_goal:
+        # steps to look ahead
         k = 10
-        
-        if include_ee_orientation:
-            pos_goal_start_idx = 7 if encode_angles else 6
-            pos_goal_end_idx = pos_goal_start_idx + 3
-            orient_goal_start_idx = 12
-            orient_goal_end_idx = orient_goal_start_idx + 3
-            pos_goal = y[k:, pos_goal_start_idx:pos_goal_end_idx]
-            orient_goal = y_raw[k:, orient_goal_start_idx:orient_goal_end_idx]
-            goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
-            last_pos_goal = y[-1, pos_goal_start_idx:pos_goal_end_idx]
-            last_orient_goal = y_raw[-1, orient_goal_start_idx:orient_goal_end_idx]
-            last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
-        else:
-            goal_start_idx = 7 if encode_angles else 6
-            goal_end_idx = goal_start_idx + 3
-            goal = y[k:, goal_start_idx:goal_end_idx]
-            last_goal = y[-1, goal_start_idx:goal_end_idx]
 
-        padding = jnp.tile(last_goal, (k, 1))  # Repeat the last goal k times
+        # define starting and ending indices for position and orientation
+        pos_goal_start_idx = 7 if encode_angles else 6
+        pos_goal_end_idx = pos_goal_start_idx + 3
+        orient_goal_start_idx = 12
+        orient_goal_end_idx = orient_goal_start_idx + 3
+
+        # extract goals
+        pos_goal = y[k:, pos_goal_start_idx:pos_goal_end_idx]
+        orient_goal = y_raw[k:, orient_goal_start_idx:orient_goal_end_idx]
+        goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
+
+        # padding for the last goal (repeat the last goal k times)
+        last_pos_goal = y[-1, pos_goal_start_idx:pos_goal_end_idx]
+        last_orient_goal = y_raw[-1, orient_goal_start_idx:orient_goal_end_idx]
+        last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
+        padding = jnp.tile(last_goal, (k, 1))
         goal = jnp.concatenate([goal, padding], axis=0)
 
         assert (
             x.shape[0] == y.shape[0] == u.shape[0] == goal.shape[0]
-        ), "Shapes of x,y,u or goal don't match, the shapes are: {}, {}, {}, {}".format(
+        ), "Lengths of x, y, u or goal don't match, the shapes are: {}, {}, {}, {}".format(
             x.shape, y.shape, u.shape, goal.shape
         )
 
+        # concatenate state and goal
         x = jnp.concatenate([x, goal], axis=-1)
         y = jnp.concatenate([y, goal], axis=-1)
 
-    # concatenate state and action
+    # # apply masks to state, goal and action (masks are array with 1s and 0s, we need to remove the dimensions with 0s)
+    # x = x[:, SPOT_STATE_MASK == 1]
+    # y = y[:, SPOT_STATE_MASK == 1]
+    # action_mask = SPOT_ACTION_MASK
+    # if num_stacked_actions > 0:
+    #     action_mask = jnp.tile(action_mask, (num_stacked_actions + 1, 1))
+    # u = u[:, action_mask == 1]
+
+    # create training data
     x_data = jnp.concatenate([x, u], axis=-1)  # current state + action
     y_data = y  # next state
 
     # check shapes
-    action_dim = 9 if include_ee_orientation else 6
     assert x_data.shape[0] == y_data.shape[0]
     assert x_data.shape[1] - action_dim * (1 + num_stacked_actions) == y_data.shape[1]
 
@@ -689,29 +530,16 @@ def _prepare_spot_datasets(
 def get_spot_recorded_data(
     encode_angle: bool = True,
     skip_first_n_points: int = 30,
-    action_delay_base: int = 0,
-    action_delay_ee: int = 0,
     num_stacked_actions: int = 0,
     num_test_points: int = 1000,
-    angle_idx: Union[int, List[int]] = 2,
-    shuffle: bool = True,
     add_goal: bool = False,
-    include_ee_orientation: bool = True,
 ):
-    if include_ee_orientation:
-        recordings_dirs = [
-            # os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
-            os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
-        ]
-        angle_idx = [2, 12, 13, 14]
-    else:
-        recordings_dirs = [
-            os.path.join(DATA_DIR, "recordings_spot_v0"),
-            os.path.join(DATA_DIR, "recordings_spot_v1"),
-            os.path.join(DATA_DIR, "recordings_spot_v2"),
-            os.path.join(DATA_DIR, "recordings_spot_v3"),
-            os.path.join(DATA_DIR, "recordings_spot_v4"),
-        ]
+    # load datasets
+    recordings_dirs = [
+        os.path.join(DATA_DIR, "recordings_spot_ee_v0"),
+        os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
+        os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
+    ]
     files = sorted(
         [
             file
@@ -719,28 +547,26 @@ def get_spot_recorded_data(
             for file in glob.glob(os.path.join(dir_path, "*.pickle"))
         ]
     )
-
-    # load datasets
     datasets_pre = _load_spot_datasets(files)
+    print(f"[data_provider] Loaded {len(datasets_pre)} datasets")
 
     # transform transitions into supervised learning datasets
     prep_fn = partial(
         _prepare_spot_datasets,
         encode_angles=encode_angle,
         skip_first_n=skip_first_n_points,
-        action_delay_base=action_delay_base,
-        action_delay_ee=action_delay_ee,
         num_stacked_actions=num_stacked_actions,
         angle_idx=[2, 12, 13, 14],
         add_goal=add_goal,
     )
     x, y = map(lambda x: jnp.concatenate(x, axis=0), zip(*map(prep_fn, datasets_pre)))
-    if shuffle:
-        indices = jnp.arange(start=0, stop=x.shape[0], step=1)
-        indices = jax.random.permutation(
-            key=jax.random.PRNGKey(9345), x=indices, independent=True
-        )
-        x, y = x[indices], y[indices]
+
+    # shuffle data
+    indices = jnp.arange(start=0, stop=x.shape[0], step=1)
+    indices = jax.random.permutation(
+        key=jax.random.PRNGKey(9345), x=indices, independent=True
+    )
+    x, y = x[indices], y[indices]
 
     # split into train and test
     x_train, y_train, x_test, y_test = (
@@ -1122,14 +948,14 @@ def provide_data_and_sim(
         defaults = DEFAULTS_SPOT
         sampling_scheme = data_spec.get("sampling", DEFAULTS_SPOT_REAL["sampling"])
 
-        # get data and sim
+        # get real recorded data without goal
         if data_source == "spot_real":
             num_stacked_actions = data_spec.get("num_stacked_actions", 0)
             if num_stacked_actions > 0:
                 sim = StackedActionSimWrapper(
                     SpotSim(encode_angle=True),
                     num_stacked_actions=num_stacked_actions,
-                    action_size=9,
+                    action_size=SPOT_ACTION_LENGTH,
                 )
             else:
                 sim = SpotSim(encode_angle=True)
@@ -1139,15 +965,16 @@ def provide_data_and_sim(
             x_train, y_train, x_test, y_test = get_spot_recorded_data(
                 encode_angle=True,
                 num_stacked_actions=num_stacked_actions,
-                include_ee_orientation=True,
             )
+
+        # get real recorded data with goal
         elif data_source == "spot_real_with_goal":
             num_stacked_actions = data_spec.get("num_stacked_actions", 0)
             if num_stacked_actions > 0:
                 sim = StackedActionSimWrapper(
                     SpotSim(encode_angle=True),
                     num_stacked_actions=num_stacked_actions,
-                    action_size=9,
+                    action_size=SPOT_ACTION_LENGTH,
                 )
             else:
                 sim = SpotSim(encode_angle=True)
@@ -1158,9 +985,7 @@ def provide_data_and_sim(
                 encode_angle=True,
                 add_goal=True,
                 num_stacked_actions=num_stacked_actions,
-                include_ee_orientation=True,
             )
-        # TODO add option for no ee orientation
         else:
             raise ValueError(f"Unknown spot data source {data_source}")
 
@@ -1235,6 +1060,79 @@ def provide_data_and_sim(
     return x_train, y_train, x_test, y_test, sim_lf
 
 
+# sample data directly from spot simulator
+def sample_from_spot_sim(
+    num_samples: int = 1000,
+    num_stacked_actions: int = 0,
+    eval_directly: bool = False,
+):
+    from sim_transfer.sims.simulators import SpotSim
+
+    sim = SpotSim(encode_angle=True)
+    if num_stacked_actions > 0:
+        sim = StackedActionSimWrapper(
+            sim, num_stacked_actions=num_stacked_actions, action_size=SPOT_ACTION_LENGTH
+        )
+
+    if not eval_directly:
+        # define actions u
+        # u = base_vx, base_vy, base_vtheta, ee_vx, ee_vy, ee_vz, ee_vrx, ee_vry, ee_vrz
+        # u has shape (num_samples, 9)
+        # make actions be sin of time for vrx, zero for all others
+        t = jnp.linspace(0, 10, num_samples)
+        u = jnp.zeros((num_samples, 9))
+        u = u.at[:, 6].set(jnp.sin(t))
+        u = u.at[:, 7].set(jnp.cos(t))
+
+        # u 0 sould be 0.1
+        u = u.at[:, 0].set(0.1)
+        u = u.at[:, 4].set(0.1)
+
+        # stack the actions
+        u = stack_spot_actions(
+            u=u,
+            num_stacked_actions=num_stacked_actions,
+            action_dim=SPOT_ACTION_LENGTH,
+        )
+
+        # define initial state x
+        x_init = jnp.zeros((SPOT_STATE_LENGTH))
+        x_init = jnp.expand_dims(x_init, axis=0)
+
+        x_train = []
+        y_train = []
+
+        # simulate the system for num_samples
+        x = x_init
+        for i in range(num_samples):
+            u_input = jnp.expand_dims(u[i], axis=0)
+            x_input = jnp.concatenate([x, u_input], axis=-1)
+            y = sim._typical_f(x_input)
+            x_train.append(x)
+            y_train.append(y)
+            x = y
+
+        x_train = jnp.concatenate(x_train, axis=0)
+        x_train = jnp.concatenate([x_train, u], axis=-1)
+        y_train = jnp.concatenate(y_train, axis=0)
+
+        # split
+        amount_train = int(num_samples * 0.8)
+        x_train, y_train = x_train[:amount_train], y_train[:amount_train]
+        x_test, y_test = x_train[amount_train:], y_train[amount_train:]
+
+    else:
+        x_train, y_train, x_test, y_test = sim.sample_datasets(
+            rng_key=jax.random.PRNGKey(1234),
+            num_samples_train=int(num_samples * 0.8),
+            num_samples_test=int(num_samples * 0.2),
+            obs_noise_std=SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+            param_mode="typical",
+        )
+
+    return x_train, y_train, x_test, y_test, sim
+
+
 if __name__ == "__main__":
     # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='real_racecar_new',
     #                                                              data_spec={'num_samples_train': 10000})
@@ -1242,10 +1140,75 @@ if __name__ == "__main__":
     #                                                              data_spec={'num_samples_train': 10000})
 
     # test spot data
-    x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-        data_source="spot_real",
-        data_spec={"num_samples_train": 5000, "num_samples_test": 50, "num_stacked_actions": 2}, 
-    )
-    print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
+    # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
+    #     data_source="spot_real",
+    #     data_spec={"num_samples_train": 5000, "num_samples_test": 50, "num_stacked_actions": 2},
+    # )
+    # print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
 
-    print(jnp.max(x_train, axis=0))
+    # print(jnp.max(x_train, axis=0))
+
+    # test spot sim data sampinling
+    num_stacked_actions = 2
+    x, y, x_test, y_test, sim = sample_from_spot_sim(
+        num_samples=100, num_stacked_actions=num_stacked_actions, eval_directly=True
+    )
+    # plot all data
+    import matplotlib.pyplot as plt
+
+    # labels
+    state_labels = [
+        "base_x",
+        "base_y",
+        "sin_base_theta",
+        "cos_base_theta",
+        "base_vx",
+        "base_vy",
+        "base_vtheta",
+        "ee_x",
+        "ee_y",
+        "ee_z",
+        "ee_vx",
+        "ee_vy",
+        "ee_vz",
+        "ee_rx",
+        "ee_ry",
+        "ee_rz",
+        "ee_vrx",
+        "ee_vry",
+        "ee_vrz",
+    ]
+
+    action_labels = [
+        "base_vx",
+        "base_vy",
+        "base_vtheta",
+        "ee_vx",
+        "ee_vy",
+        "ee_vz",
+        "ee_vrx",
+        "ee_vry",
+        "ee_vrz",
+    ]
+
+    n_rows = len(state_labels) + len(action_labels)
+    n_cols = 2
+
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
+
+    for i in range(n_rows):
+        if i < len(state_labels):
+            # axs[i, 0].plot(x[:, i], label='x')
+            axs[i, 0].plot(y[:, i], label="y")
+            axs[i, 0].set_title(f"{state_labels[i]}")
+        else:
+            axs[i, 0].plot(x[:, i], label="u_t_0")
+            if num_stacked_actions > 0:
+                axs[i, 0].plot(x[:, i + 9], label="u_t_1")
+            if num_stacked_actions > 1:
+                axs[i, 0].plot(x[:, i + 18], label="u_t_2")
+            axs[i, 0].set_title(f"{action_labels[i - len(state_labels)]}")
+        axs[i, 0].legend()
+
+    # save in file
+    plt.savefig("sim_sampled_data.png")
