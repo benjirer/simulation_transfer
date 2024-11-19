@@ -320,7 +320,6 @@ class RLFromOfflineData:
         y_test = y_data[num_train:]
 
         return x_train, y_train, x_test, y_test
-
     def train_model(
         self, bnn_train_steps: int, return_best_bnn: bool = True
     ) -> BNN_SVGD:

@@ -462,6 +462,12 @@ def experiment(
     #     return_best_bnn=bool(best_bnn_model),
     # )
 
+    # # train model only
+    # bnn_model = rl_from_offline_data.train_model(
+    #     bnn_train_steps=bnn_train_steps,
+    #     return_best_bnn=bool(best_bnn_model),
+    # )
+
     skip_eval = False
     if not skip_eval:
         # evaluate learned model
