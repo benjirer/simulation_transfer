@@ -16,12 +16,24 @@ from sim_transfer.sims.tolerance_reward import ToleranceReward
 from sim_transfer.sims.util import (
     encode_angles,
     decode_angles,
+    encode_angles_spot,
+    decode_angles_spot,
     plot_rc_trajectory,
     plot_spot_trajectory,
     sample_pos_and_goal_spot,
 )
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
 from sim_transfer.sims.simulators import SpotSim
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_LENGTH,
+    SPOT_STATE_LENGTH_ENCODED,
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_ANGLE_IDX,
+    SPOT_DT,
+    SPOT_DOMAIN_LOWER,
+    SPOT_DOMAIN_UPPER,
+)
 
 
 class RCCarEnvReward:
@@ -303,12 +315,9 @@ class RCCarSimEnv:
 
 
 class SpotEnvReward:
-    _include_ee_orientation: bool = True
-    if _include_ee_orientation:
-        _angle_idx: list = [2, 12, 13, 14]
-    else:
-        _angle_idx: int = 2
-    dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
+    _angle_idx: list = SPOT_ANGLE_IDX
+    dim_action: Tuple[int] = (SPOT_ACTION_LENGTH,)
+    dim_action: Tuple[int] = (9,)
 
     def __init__(
         self,
@@ -321,7 +330,7 @@ class SpotEnvReward:
         base_linear_action_cost_weight: float = 1.5,
         base_theta_action_cost_weight: float = 1.0,
         ee_action_cost_weight: float = 0.5,
-        dim_goal: int = 3 if not _include_ee_orientation else 6,
+        dim_goal: int = SPOT_GOAL_LENGTH,
     ):
         self.encode_angle = encode_angle
         self.ctrl_cost_weight = ctrl_cost_weight
@@ -344,6 +353,12 @@ class SpotEnvReward:
             value_at_margin=0.1,
             sigmoid="long_tail",
         )
+        self.tolerance_reward_ee_orientation = ToleranceReward(
+            bounds=(0.0, jnp.pi/10),
+            margin=0.5 * jnp.pi/10,
+            value_at_margin=0.1,
+            sigmoid="long_tail",
+        )
 
     def forward(
         self,
@@ -357,9 +372,12 @@ class SpotEnvReward:
         state_reward = self.state_reward(obs, next_obs)
 
         # action cost
-        base_linear_action_cost, base_theta_action_cost, ee_action_cost, total_action_cost = (
-            self.action_cost(action)
-        )
+        (
+            base_linear_action_cost,
+            base_theta_action_cost,
+            ee_action_cost,
+            total_action_cost,
+        ) = self.action_cost(action)
         action_cost = (
             self.base_linear_action_cost_weight * base_linear_action_cost
             + self.base_theta_action_cost_weight * base_theta_action_cost
@@ -367,17 +385,14 @@ class SpotEnvReward:
         )
         # action_cost = total_action_cost
 
-        # action difference cost
-        # action_diff_cost = self.action_difference_cost(next_obs, action)
-
         # reward for staying within ee-body distance constraint
         ee_body_reward = self.ee_body_reward(next_obs)
 
         # total reward
         reward = (
             state_reward
-            + self.ctrl_cost_weight * action_cost
-            + self.ee_body_reward_weight * ee_body_reward
+            # + self.ctrl_cost_weight * action_cost
+            # + self.ee_body_reward_weight * ee_body_reward
         )
         return reward
 
@@ -387,75 +402,70 @@ class SpotEnvReward:
         base_linear_action_cost = -(action[:2] ** 2).sum(-1)
         base_theta_action_cost = -(action[2] ** 2)
         ee_action_cost = -(action[3:] ** 2).sum(-1)
-        total_action_cost = -(action ** 2).sum(-1)
-        return base_linear_action_cost, base_theta_action_cost, ee_action_cost, total_action_cost
+        total_action_cost = -(action**2).sum(-1)
+        return (
+            base_linear_action_cost,
+            base_theta_action_cost,
+            ee_action_cost,
+            total_action_cost,
+        )
 
     def state_reward(self, obs: jnp.array, next_obs: jnp.array) -> jnp.array:
         """Computes the reward for the given observations"""
         if self.encode_angle:
-            if self._include_ee_orientation:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
-                goal = next_obs[..., 18 : 18 + self.dim_goal]
-            else:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
-                goal = next_obs[..., 12 : 12 + self.dim_goal]
+            next_obs = decode_angles_spot(next_obs, angle_idx=self._angle_idx)
+        goal = next_obs[..., SPOT_STATE_LENGTH : SPOT_STATE_LENGTH + self.dim_goal]
+
         assert (
             goal.shape[-1] == self.dim_goal
         ), f"Goal shape {goal.shape} must be {self.dim_goal}"
+
+        # ee position
         ee_pos_diff = next_obs[..., 6:9] - goal[0:3]
         ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
-        if self._include_ee_orientation:
-            observed_angles = next_obs[..., 12:15]
-            goal_angles = goal[3:6]
-            goal_angles = jnp.broadcast_to(goal_angles, observed_angles.shape)
-            observed_rotation = R.from_euler('xyz', observed_angles, degrees=False)
-            goal_rotation = R.from_euler('xyz', goal_angles, degrees=False)
-            relative_rotation = goal_rotation * observed_rotation.inv()
-            rotation_dist = relative_rotation.magnitude()
-            rotation_dist_scaled = 2 * (rotation_dist / jnp.pi)
-            rotation_dist_scaled = jnp.clip(rotation_dist_scaled, 0.0, 2.0)
-            total_dist = ee_pos_dist + rotation_dist_scaled
-        else:
-            total_dist = ee_pos_dist
-        
+
+        # ee orientation
+        current_angles = next_obs[..., 12:15]
+        goal_angles = goal[3:6]
+
+        # jax.debug.print("current_angles: {}", current_angles)
+        # jax.debug.print("goal_angles: {}", goal_angles)
+
+        # complex reward for orientation
+        observed_rotation = R.from_euler("xyz", current_angles, degrees=False)
+        goal_rotation = R.from_euler("xyz", goal_angles, degrees=False)
+        relative_rotation = observed_rotation.inv() * goal_rotation
+        rotation_dist = relative_rotation.magnitude()
+        # ee_ori_reward = self.tolerance_reward_ee_orientation(rotation_dist)
+        ee_ori_reward = 10*(1-rotation_dist/jnp.pi)
+        # ee_ori_reward = -rotation_dist/jnp.pi
+        # jax.debug.print("ee_ori_reward: {}", ee_ori_reward)
+        # rotation_dist_scaled = 2 * (rotation_dist / jnp.pi)
+        # rotation_dist_scaled = jnp.clip(rotation_dist_scaled, 0.0, 2.0)
+
+        # simple reward for orientation
+        # angle_differences = jnp.arctan2(
+        #     jnp.sin(current_angles - goal_angles),
+        #     jnp.cos(current_angles - goal_angles)
+        # )
+        # ee_ori_reward = -jnp.linalg.norm(angle_differences)
+        # jax.debug.print("ee_ori_reward: {}", ee_ori_reward)
+
+        # total distance
+        # total_dist = ee_pos_dist + rotation_dist_scaled
+
+        # TODO: add reward for staying within the goal orientation
         total_dist = ee_pos_dist
-        
-        reward = self.tolerance_reward(total_dist)
+        ee_pos_reward = self.tolerance_reward(total_dist)
+        # jax.debug.print("ee_pos_reward: {}", ee_pos_reward)
+
+        reward = ee_ori_reward
         return reward
-    
-    def action_difference_cost(self, next_obs: jnp.array, action: jnp.array) -> jnp.array:
-        """Computes the cost for the difference between current velocity and commanded velocity"""
-        if self.encode_angle:
-            if self._include_ee_orientation:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
-            else:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
-        current_base_vel = next_obs[..., 3:6]
-        current_ee_vel = next_obs[..., 9:12]
-        current_vel = jnp.concatenate([current_base_vel, current_ee_vel], axis=-1)
-        if self._include_ee_orientation:
-            current_ee_ang_vel = next_obs[..., 15:18]
-            current_vel = jnp.concatenate([current_vel, current_ee_ang_vel], axis=-1)
-        action_diff = current_vel - action
-        action_diff_cost = -(action_diff ** 2).sum(-1)
-        return action_diff_cost
 
     def ee_body_reward(self, next_obs: jnp.array) -> jnp.array:
         """Computes the reward for ee-base distance staying within constraint"""
         if self.encode_angle:
-            if self._include_ee_orientation:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[0])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[1])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[2])
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx[3])
-            else:
-                next_obs = decode_angles(next_obs, angle_idx=self._angle_idx)
+            next_obs = decode_angles_spot(next_obs, angle_idx=self._angle_idx)
         base_pos = next_obs[..., :2]
         base_pos = jnp.concatenate([base_pos, jnp.array([0.445])], axis=-1)
         ee_pos = next_obs[..., 6:9]
@@ -468,15 +478,11 @@ class SpotEnvReward:
 
 class SpotSimEnv:
     max_steps: int = 200
-    _dt: float = 1 / 15.0
-    _include_ee_orientation: bool = True
-    dim_action: Tuple[int] = (6,) if not _include_ee_orientation else (9,)
-    if _include_ee_orientation:
-        _angle_idx: list = [2, 12, 13, 14]
-    else:
-        _angle_idx: int = 2
-    _domain_lower = SpotSim._domain_lower
-    _domain_upper = SpotSim._domain_upper
+    _dt: float = SPOT_DT
+    dim_action: Tuple[int] = (SPOT_ACTION_LENGTH,)
+    _angle_idx: list = SPOT_ANGLE_IDX
+    _domain_lower = SPOT_DOMAIN_LOWER
+    _domain_upper = SPOT_DOMAIN_UPPER
 
     def __init__(
         self,
@@ -490,8 +496,8 @@ class SpotSimEnv:
         margin_factor: float = 10.0,
         max_velocity_base: float = 1.6,
         max_ang_velocity_base: float = 1.5,
-        max_velocity_ee: float = 2.5,
-        max_ang_velocity_ee: float = 2.5,
+        max_velocity_ee: float = 1.5,
+        max_ang_velocity_ee: float = 1.5,
         seed: int = 230492394,
         max_steps: int = 200,
     ):
@@ -507,19 +513,22 @@ class SpotSimEnv:
             spot_obs_noise_stds: observation noise standard deviations that overwrite the default values
             action_delay: whether to delay the action by a certain amount of time (in seconds)
             margin_factor: factor to scale the margin of the tolerance reward
-            max_velocity: maximum velocity of the spot robot
-            max_steps: maximum number of steps
+            max_velocity_base: maximum velocity of the spot robot base
+            max_ang_velocity_base: maximum angular velocity of the spot robot base
+            max_velocity_ee: maximum velocity of the spot robot end-effector
+            max_ang_velocity_ee: maximum angular velocity of the spot robot end-effector
             seed: random number generator seed
+            max_steps: maximum number of steps
         """
         self.ctrl_cost_weight = ctrl_cost_weight
         self.ctrl_diff_weight = ctrl_diff_weight
         self.encode_angle: bool = encode_angle
-        if self._include_ee_orientation:
-            self.dim_state: Tuple[int] = (22,) if encode_angle else (18,)
-        else:
-            self.dim_state: Tuple[int] = (13,) if encode_angle else (12,)
+        self.dim_state: Tuple[int] = (
+            (SPOT_STATE_LENGTH_ENCODED,) if encode_angle else (SPOT_STATE_LENGTH,)
+        )
         self._rds_key = jax.random.PRNGKey(seed)
         self.max_steps = max_steps
+        self.use_obs_noise = use_obs_noise
 
         self.max_velocity_base = max_velocity_base
         self.max_velocity_ee = max_velocity_ee
@@ -527,7 +536,7 @@ class SpotSimEnv:
         self.max_ang_velocity_base = max_ang_velocity_base
 
         # initialize dynamics and observation noise models
-        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=False, include_ee_orientation=self._include_ee_orientation)
+        self._dynamics_model = SpotDynamicsModel(dt=self._dt, encode_angle=False)
 
         # set deffault params
         self._set_spot_params()
@@ -546,8 +555,6 @@ class SpotSimEnv:
         self._next_step_fn = jax.jit(
             partial(self._dynamics_model.next_step, params=self._dynamics_params)
         )
-
-        self.use_obs_noise = use_obs_noise
 
         # initialize reward model
         self._reward_model = SpotEnvReward(
@@ -585,7 +592,6 @@ class SpotSimEnv:
             rng_key=reset_key,
             domain_lower=self._domain_lower,
             domain_upper=self._domain_upper,
-            include_ee_orientation=self._include_ee_orientation,
         )
 
         self._time = 0
@@ -599,9 +605,7 @@ class SpotSimEnv:
         """Performs one step in the environment
 
         Args:
-            action: 
-                - array of size (6,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz]
-                - array of size (9,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz, ee_vrx, ee_vry, ee_vrz]
+            action: array of size (9,) with [base_vx, base_vy, base_vw, ee_vx, ee_vy, ee_vz, ee_vrx, ee_vry, ee_vrz]
             rng_key: rng key for the observation noise (optional)
         """
 
@@ -614,10 +618,9 @@ class SpotSimEnv:
         action = action.at[3].set(self.max_velocity_ee * action[3])
         action = action.at[4].set(self.max_velocity_ee * action[4])
         action = action.at[5].set(self.max_velocity_ee * action[5])
-        if self._include_ee_orientation:
-            action = action.at[6].set(self.max_ang_velocity_ee * action[6])
-            action = action.at[7].set(self.max_ang_velocity_ee * action[7])
-            action = action.at[8].set(self.max_ang_velocity_ee * action[8])
+        action = action.at[6].set(self.max_ang_velocity_ee * action[6])
+        action = action.at[7].set(self.max_ang_velocity_ee * action[7])
+        action = action.at[8].set(self.max_ang_velocity_ee * action[8])
         rng_key = self.rds_key if rng_key is None else rng_key
 
         # handle action delay
@@ -661,10 +664,7 @@ class SpotSimEnv:
         self, state: jnp.array, rng_key: Optional[jax.random.PRNGKey] = None
     ) -> jnp.array:
         """Adds observation noise to the state"""
-        if self._include_ee_orientation:
-            assert state.shape[-1] == 18
-        else:
-            assert state.shape[-1] == 12
+        assert state.shape[-1] == SPOT_STATE_LENGTH
         rng_key = self.rds_key if rng_key is None else rng_key
 
         # add observation noise
@@ -677,22 +677,10 @@ class SpotSimEnv:
 
         # encode angles if desired
         if self.encode_angle:
-            if self._include_ee_orientation:
-                indices_in_encoded = [self._angle_idx[0], self._angle_idx[1] + 1, self._angle_idx[2] + 2, self._angle_idx[3] + 3]
-                obs = encode_angles(obs, indices_in_encoded[0])
-                obs = encode_angles(obs, indices_in_encoded[1])
-                obs = encode_angles(obs, indices_in_encoded[2])
-                obs = encode_angles(obs, indices_in_encoded[3])
-            else:
-                obs = encode_angles(obs, self._angle_idx)
-        if self._include_ee_orientation:
-            assert (obs.shape[-1] == 22 and self.encode_angle) or (
-                obs.shape[-1] == 18 and not self.encode_angle
-            )
-        else:
-            assert (obs.shape[-1] == 13 and self.encode_angle) or (
-                obs.shape[-1] == 12 and not self.encode_angle
-            )
+            obs = encode_angles_spot(obs, self._angle_idx)
+        assert (obs.shape[-1] == SPOT_STATE_LENGTH_ENCODED and self.encode_angle) or (
+            obs.shape[-1] == SPOT_STATE_LENGTH and not self.encode_angle
+        )
         return obs
 
     def _get_delayed_action(self, action: jnp.array) -> Tuple[jnp.array, jnp.array]:
@@ -727,15 +715,15 @@ class SpotSimEnv:
         return self._time
 
     def _set_spot_params(self):
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS, SPOT_DEFAULT_OBSERVATION_NOISE_STD
-        from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION, SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
+        from sim_transfer.sims.spot_sim_config import (
+            SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION,
+            SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+        )
 
-        if self._include_ee_orientation:
-            self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
-            self._obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
-        else:
-            self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS
-            self._obs_noise_stds: jnp.array = SPOT_DEFAULT_OBSERVATION_NOISE_STD
+        self._default_spot_model_params: Dict = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
+        self._obs_noise_stds: jnp.array = (
+            SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
+        )
 
 
 if __name__ == "__main__":

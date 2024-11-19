@@ -1506,6 +1506,7 @@ from sim_transfer.sims.spot_sim_config import SPOT_STATE_LENGTH, SPOT_ACTION_LEN
 from sim_transfer.sims.util import encode_angles_spot, decode_angles_spot
 
 
+from jax.scipy.spatial.transform import Rotation
 class SpotDynamicsModel(DynamicsModel):
 
     def __init__(
@@ -1551,15 +1552,22 @@ class SpotDynamicsModel(DynamicsModel):
                     + self.dt_integration * dx[6:9] * gamma[3:6]
                     + beta_pos[3:6]
                 )
-                q = q.at[12:15].set(
-                    carry[12:15]
-                    + self.dt_integration * dx[12:15] * gamma[6:9]
-                    + beta_pos[6:9]
-                )
 
                 # velocities
                 q = q.at[3:6].set(self.dt_integration * dx[3:6] + beta_vel[:3])
                 q = q.at[9:12].set(self.dt_integration * dx[9:12] + beta_vel[3:6])
+
+                # EE orientation
+                ee_euler_angles = carry[12:15]  # [roll, pitch, yaw]
+                R_ee_current = Rotation.from_euler('xyz', ee_euler_angles)
+                omega = dx[12:15] # [ee_rx_dot, ee_ry_dot, ee_rz_dot] = [vrx, vry, vrz] (in hand frame)
+                delta_rotvec = omega * self.dt_integration * gamma[6:9] + beta_pos[6:9]
+                delta_rot = Rotation.from_rotvec(delta_rotvec)
+                R_ee_updated =  R_ee_current * delta_rot
+                ee_euler_angles_updated = R_ee_updated.as_euler('xyz')
+                q = q.at[12:15].set(ee_euler_angles_updated)
+
+                # EE angular velocities
                 q = q.at[15:18].set(self.dt_integration * dx[15:18] + beta_vel[6:9])
 
                 return q

@@ -4,37 +4,46 @@ from experiments.util import generate_run_commands
 from typing import List, Optional
 import sys
 import random
+import warnings
+
+# Suppress specific DeprecationWarning from google.protobuf.internal.well_known_types
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=r".*datetime.datetime.utcnow\(\) is deprecated.*",
+    module=r"google\.protobuf\.internal\.well_known_types"
+)
 
 def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 
     random.seed(0)
     # random_seed = random.sample(range(1, 1_000_000), 3)
-    random_seed = [42, 9126, 1913244]
-    random_seed = [10]
-    num_offline_collected_transitions = [800, 2000, 5000]
-    num_offline_collected_transitions = [16000]
+    # random_seed = [42, 9126, 1913244]
+    random_seed = [9126]
+    # num_offline_collected_transitions = [800, 2000, 5000]
+    # num_offline_collected_transitions = [1000, 5000, 8000]
+    num_offline_collected_transitions = [13000]
 
     parameters = {
         # parameters general
-        "num_frame_stack": [1],
+        "num_frame_stack": [2],
         "random_seed": random_seed,
         "num_offline_collected_transitions": num_offline_collected_transitions,
         "test_data_ratio": [0.15],
         "wandb_logging": [True],
-        "project_name": ["ee_ori_testing"],
+        "project_name": ["new_model_testing"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
-        "include_ee_orientation": [True],
     }
 
     parameters_rl = {
         # parameters rl
-        "horizon_len": [120],
-        "sac_num_env_steps": [2_500_000],
+        "horizon_len": [100],
+        "sac_num_env_steps": [3_500_000],
         "best_policy": [1],
         "margin_factor": [10.0],
-        "ctrl_cost_weight": [0.05],
-        "ctrl_diff_weight": [0.3],
+        "ctrl_cost_weight": [0.01],
+        "ctrl_diff_weight": [0.00],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [1],
         "eval_on_all_offline_data": [1],
@@ -46,15 +55,15 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "learnable_likelihood_std": ["yes"],
         "include_aleatoric_noise": [1],
         "best_bnn_model": [1],
-        "predict_difference": [1],
+        "predict_difference": [1] if model == "bnn-fsvgd" or model == "bnn-sim-fsvgd" else [0],
         "use_sim_prior": [1] if model == "bnn-sim-fsvgd" else [0],
         "use_sim_model": [1] if model == "sim-model" else [0],
-        "num_measurement_points": [48],
-        "bnn_batch_size": [48],
+        "num_measurement_points": [32*2],
+        "bnn_batch_size": [32*2],
         "likelihood_exponent": [1.0],
         "bandwidth_svgd": [5.0],
         "num_epochs": [100],
-        "max_train_steps": [300_000],
+        "max_train_steps": [200_000],
         "min_train_steps": [10_000],
         "num_sim_fitting_steps": [40_000],
         "length_scale_aditive_sim_gp": [1.0],

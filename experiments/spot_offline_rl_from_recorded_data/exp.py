@@ -5,7 +5,7 @@ import jax.random as jr
 import wandb
 import os
 
-from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
+from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED, sample_from_spot_sim
 from sim_transfer.rl.spot_rl_on_offline_data import RLFromOfflineData
 
 # imports for model
@@ -48,7 +48,6 @@ def experiment(
     obtain_consecutive_data: int = 1,
     wandb_logging: bool = True,
     save_traj_local: bool = True,
-    include_ee_orientation: bool = True,
     # default model parameters
     likelihood_exponent: float = 1.0,
     bandwidth_svgd: float = 2.0,
@@ -141,7 +140,6 @@ def experiment(
         train_sac_only_from_init_states=train_sac_only_from_init_states,
         obtain_consecutive_data=obtain_consecutive_data,
         include_aleatoric_noise=include_aleatoric_noise,
-        include_ee_orientation=include_ee_orientation,
         # parameters model
         bnn_train_steps=bnn_train_steps,
         ll_std=learnable_likelihood_std,
@@ -191,6 +189,114 @@ def experiment(
         data_seed=int(int_data_seed),
     )
 
+    # # TODO Temporary: only predict include ee orientation and angular velocity
+    # x_train_state = x_train[..., 13:22]
+    # x_test_state = x_test[..., 13:22]
+    # x_train_action = x_train[..., 22+6+6:22+6+9]
+    # x_test_action = x_test[..., 22+6+6:22+6+9]
+    # x_train = jax.numpy.concatenate([x_train_state, x_train_action], axis=-1)
+    # x_test = jax.numpy.concatenate([x_test_state, x_test_action], axis=-1)
+    # y_train = y_train[..., 13:22]
+    # y_test = y_test[..., 13:22]
+
+    # # plot states
+    # import matplotlib.pyplot as plt
+    # fig, axs = plt.subplots(9, 2, figsize=(10, 10))
+    # for i in range(9):
+    #     axs[i, 0].plot(x_train[:20, i], label="x")
+    #     axs[i, 0].plot(y_train[:20, i], label="y")
+    #     axs[i, 0].legend()
+    # for i in range(3):
+    #     axs[i, 1].plot(x_train_action[:20, i], label="action")
+    #     axs[i, 1].legend()
+
+    # # save fig
+    # if wandb_logging:
+    #     wandb.log({"states": wandb.Image(plt)})
+
+    # # temp domain and temp normalization stats
+    # temp_lower = jax.numpy.array(
+    #     [
+    #         # ee orientation
+    #         -jax.numpy.pi,
+    #         -jax.numpy.pi,
+    #         -jax.numpy.pi,
+    #         # ee angular vel
+    #         -2.5,
+    #         -2.5,
+    #         -2.5,
+    #         # ee angular action
+    #         -2.5,
+    #         -2.5,
+    #         -2.5,
+    #     ]
+    # )
+
+    # temp_upper = jax.numpy.array(
+    #     [
+    #         # ee orientation
+    #         jax.numpy.pi,
+    #         jax.numpy.pi,
+    #         jax.numpy.pi,
+    #         # ee angular vel
+    #         2.5,
+    #         2.5,
+    #         2.5,
+    #         # ee angular action
+    #         2.5,
+    #         2.5,
+    #         2.5,
+    #     ]
+    # )
+
+    # temp_angle_idx = [0, 1, 2]
+    # from sim_transfer.sims.domain import Domain, HypercubeDomain, HypercubeDomainWithAngles
+
+    # temp_domain = HypercubeDomainWithAngles(
+    #     temp_angle_idx, temp_lower, temp_upper, 
+    # )
+    # # temp_domain = HypercubeDomain(
+    # #     temp_lower, temp_upper
+    # # )
+
+    # temp_x_std = jax.numpy.array(
+    #     [
+    #         0.714,
+    #         0.699,
+    #         0.541,
+    #         0.22,
+    #         0.71,
+    #         0.659,
+    #         1.02,
+    #         1.0,
+    #         1.016,
+    #         1.349,
+    #         1.357,
+    #         1.351,
+    #     ]
+    # )
+
+    # temp_y_std = jax.numpy.array(
+    #     [
+    #         0.714,
+    #         0.699,
+    #         0.542,
+    #         0.22,
+    #         0.711,
+    #         0.659,
+    #         1.02,
+    #         1.001,
+    #         1.016,
+    #     ]
+    # )
+
+    # temp_normalization_stats = {
+    #     "x_mean": jax.numpy.zeros(12), # TODO Temporary
+    #     "x_std": temp_x_std,
+    #     "y_mean": jax.numpy.zeros(9), # TODO Temporary
+    #     "y_std": temp_y_std,
+    # }
+
     print(
         "Original data from provider: x_train.shape",
         x_train.shape,
@@ -205,7 +311,9 @@ def experiment(
     # set up model
     standard_bnn_params = {
         "input_size": sim.input_size,
-        "output_size": sim.output_size,
+        # "input_size": x_train.shape[-1], # TODO Temporary
+        "output_size": sim.output_size, 
+        # "output_size": y_train.shape[-1], # TODO Temporary
         "rng_key": key_bnn,
         "likelihood_std": _SPOT_NOISE_STD_ENCODED,
         "normalize_data": True,
@@ -252,19 +360,16 @@ def experiment(
             0.02,  # ee_vx
             0.02,  # ee_vy
             0.02,  # ee_vz
+            0.1, # ee_rx_sin
+            0.1, # ee_rx_cos
+            0.1, # ee_ry_sin
+            0.1, # ee_ry_cos
+            0.1, # ee_rz_sin
+            0.1, # ee_rz_cos
+            0.5, # ee_vrx
+            0.5, # ee_vry
+            0.5, # ee_vrz
         ]
-        if include_ee_orientation:
-            OUPUTSCALE_SPOT += [
-                1.0, # ee_rx_sin
-                1.0, # ee_rx_cos
-                1.0, # ee_ry_sin
-                1.0, # ee_ry_cos
-                1.0, # ee_rz_sin
-                1.0, # ee_rz_cos
-                1.0, # ee_vrx
-                1.0, # ee_vry
-                1.0, # ee_vrz
-            ]
         # OUPUTSCALE_SPOT = 1.0
 
         sim = AdditiveSim(
@@ -301,9 +406,11 @@ def experiment(
 
         model = BNN_FSVGD(
             **standard_bnn_params,
-            normalization_stats=sim.normalization_stats,
+            normalization_stats=sim.normalization_stats, 
+            # normalization_stats=temp_normalization_stats, # TODO Temporary
             num_train_steps=bnn_train_steps,
             domain=sim.domain,
+            # domain=temp_domain, # TODO Temporary
             lr=lr,
             bandwidth_svgd=bandwidth_svgd,
         )
@@ -340,39 +447,38 @@ def experiment(
         include_aleatoric_noise=bool(include_aleatoric_noise),
         predict_difference=bool(predict_difference),
         eval_bnn_model_on_all_offline_data=bool(eval_on_all_offline_data),
-        include_ee_orientation=include_ee_orientation,
     )
 
     # get policy from offline data
-    # policy, params, metrics, bnn_model = (
-    #     rl_from_offline_data.prepare_policy_from_offline_data(
-    #         bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
-    #     )
-    # )
+    policy, params, metrics, bnn_model = (
+        rl_from_offline_data.prepare_policy_from_offline_data(
+            bnn_train_steps=bnn_train_steps, return_best_bnn=bool(best_bnn_model)
+        )
+    )
 
     # train model only
-    bnn_model = rl_from_offline_data.train_model(
-        bnn_train_steps=bnn_train_steps,
-        return_best_bnn=bool(best_bnn_model),
-    )
+    # bnn_model = rl_from_offline_data.train_model(
+    #     bnn_train_steps=bnn_train_steps,
+    #     return_best_bnn=bool(best_bnn_model),
+    # )
 
     skip_eval = False
     if not skip_eval:
         # evaluate learned model
-        rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
+        # rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
         
-        # # evaluate policy on learned model
-        # rl_from_offline_data.evaluate_policy(
-        #     policy,
-        #     bnn_model,
-        #     key=key_evaluation_trained_bnn,
-        #     num_evals=10,
-        #     save_traj_dir=(
-        #         f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
-        #         if save_traj_local
-        #         else None
-        #     ),
-        # )
+        # evaluate policy on learned model
+        rl_from_offline_data.evaluate_policy(
+            policy,
+            bnn_model,
+            key=key_evaluation_trained_bnn,
+            num_evals=30,
+            save_traj_dir=(
+                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+                if save_traj_local
+                else None
+            ),
+        )
 
         # # evaluate policy on default simulator
         # rl_from_offline_data.evaluate_policy_on_the_simulator(
@@ -411,7 +517,6 @@ def main(args):
         obtain_consecutive_data=args.obtain_consecutive_data,
         wandb_logging=args.wandb_logging,
         save_traj_local=args.save_traj_local,
-        include_ee_orientation=args.include_ee_orientation,
         # model parameters
         learnable_likelihood_std=args.learnable_likelihood_std,
         include_aleatoric_noise=args.include_aleatoric_noise,
@@ -457,7 +562,6 @@ if __name__ == "__main__":
     parser.add_argument("--obtain_consecutive_data", type=int, default=0)
     parser.add_argument("--wandb_logging", type=bool, default=True)
     parser.add_argument("--save_traj_local", type=bool, default=True)
-    parser.add_argument("--include_ee_orientation", type=bool, default=True)
 
     # model parameters
     parser.add_argument("--learnable_likelihood_std", type=str, default="yes")
