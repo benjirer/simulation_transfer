@@ -354,8 +354,8 @@ class SpotEnvReward:
             sigmoid="long_tail",
         )
         self.tolerance_reward_ee_orientation = ToleranceReward(
-            bounds=(0.0, jnp.pi/10),
-            margin=0.5 * jnp.pi/10,
+            bounds=(0.0, 0.1),
+            margin=20 * 0.1,
             value_at_margin=0.1,
             sigmoid="long_tail",
         )
@@ -383,7 +383,7 @@ class SpotEnvReward:
             + self.base_theta_action_cost_weight * base_theta_action_cost
             + self.ee_action_cost_weight * ee_action_cost
         )
-        # action_cost = total_action_cost
+        action_cost = total_action_cost
 
         # reward for staying within ee-body distance constraint
         ee_body_reward = self.ee_body_reward(next_obs)
@@ -391,8 +391,8 @@ class SpotEnvReward:
         # total reward
         reward = (
             state_reward
-            # + self.ctrl_cost_weight * action_cost
-            # + self.ee_body_reward_weight * ee_body_reward
+            + self.ctrl_cost_weight * action_cost
+            + self.ee_body_reward_weight * ee_body_reward
         )
         return reward
 
@@ -421,12 +421,17 @@ class SpotEnvReward:
         ), f"Goal shape {goal.shape} must be {self.dim_goal}"
 
         # ee position
-        ee_pos_diff = next_obs[..., 6:9] - goal[0:3]
-        ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
+        # ee_pos_diff = next_obs[..., 6:9] - goal[0:3]
+        # ee_pos_dist = jnp.sqrt(jnp.sum(jnp.square(ee_pos_diff), axis=-1))
 
         # ee orientation
+        # TODO: fix goal dims
+
         current_angles = next_obs[..., 12:15]
-        goal_angles = goal[3:6]
+        # goal_angles = goal[3:6+3]
+        goal_angles = goal[0:6]
+        # decode goal angles
+        goal_angles = decode_angles_spot(goal_angles, angle_idx=[0,1,2])
 
         # jax.debug.print("current_angles: {}", current_angles)
         # jax.debug.print("goal_angles: {}", goal_angles)
@@ -435,9 +440,13 @@ class SpotEnvReward:
         observed_rotation = R.from_euler("xyz", current_angles, degrees=False)
         goal_rotation = R.from_euler("xyz", goal_angles, degrees=False)
         relative_rotation = observed_rotation.inv() * goal_rotation
-        rotation_dist = relative_rotation.magnitude()
+        rotation_dist = relative_rotation.magnitude()/jnp.pi
+        ee_ori_reward = rotation_dist
+        # jax.debug.print("rotation_dist: {}", rotation_dist)
         # ee_ori_reward = self.tolerance_reward_ee_orientation(rotation_dist)
-        ee_ori_reward = 10*(1-rotation_dist/jnp.pi)
+        # jax.debug.print("ee_ori_reward: {}", ee_ori_reward)
+
+        # ee_ori_reward = 2*(1-rotation_dist/jnp.pi)
         # ee_ori_reward = -rotation_dist/jnp.pi
         # jax.debug.print("ee_ori_reward: {}", ee_ori_reward)
         # rotation_dist_scaled = 2 * (rotation_dist / jnp.pi)
@@ -455,8 +464,8 @@ class SpotEnvReward:
         # total_dist = ee_pos_dist + rotation_dist_scaled
 
         # TODO: add reward for staying within the goal orientation
-        total_dist = ee_pos_dist
-        ee_pos_reward = self.tolerance_reward(total_dist)
+        # total_dist = ee_pos_dist
+        # ee_pos_reward = self.tolerance_reward(total_dist)
         # jax.debug.print("ee_pos_reward: {}", ee_pos_reward)
 
         reward = ee_ori_reward

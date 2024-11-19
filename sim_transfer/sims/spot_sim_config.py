@@ -11,7 +11,7 @@ SPOT_DOMAIN_LOWER = jnp.array(
         # base pos
         -2.5,
         -2.5,
-        -jnp.pi,
+        -jnp.pi/2,
         # base vel
         -1.6,
         -1.6,
@@ -26,8 +26,8 @@ SPOT_DOMAIN_LOWER = jnp.array(
         -2.5,
         # ee orientation
         -jnp.pi,
-        -jnp.pi,
-        -jnp.pi,
+        -jnp.pi/2,
+        0,
         # ee angular vel
         -2.5,
         -2.5,
@@ -52,7 +52,7 @@ SPOT_DOMAIN_UPPER = jnp.array(
         # base pos
         4.5,
         2.5,
-        jnp.pi,
+        jnp.pi/2,
         # base vel
         1.6,
         1.6,
@@ -67,7 +67,7 @@ SPOT_DOMAIN_UPPER = jnp.array(
         2.5,
         # ee orientation
         jnp.pi,
-        jnp.pi,
+        jnp.pi/2,
         jnp.pi,
         # ee angular vel
         2.5,
@@ -158,6 +158,7 @@ SPOT_GOAL_MASK = jnp.array(
 SPOT_STATE_LENGTH = 18
 SPOT_STATE_LENGTH_ENCODED = 22
 SPOT_ACTION_LENGTH = 9
+# TODO: fix goal dims
 SPOT_GOAL_LENGTH = 6
 
 ################################ Lables ################################

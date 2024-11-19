@@ -5,6 +5,21 @@ from typing import Optional, Tuple, Union, List
 import jax.random
 import matplotlib.pyplot as plt
 from brax.training.types import Transition
+import time
+import os
+from scipy.spatial.transform import Rotation as R
+
+from sim_transfer.sims.spot_sim_config import (
+    SPOT_STATE_LENGTH, 
+    SPOT_STATE_LENGTH_ENCODED, 
+    SPOT_ACTION_LENGTH,
+    SPOT_GOAL_LENGTH,
+    SPOT_STATE_LABELS, 
+    SPOT_STATE_LABELS_ENCODED, 
+    SPOT_ACTION_LABELS,
+    SPOT_GOAL_LABELS,
+    SPOT_ANGLE_IDX,
+    )
 
 
 def encode_angles_numpy(state: np.array, angle_idx: int) -> np.array:
@@ -228,16 +243,7 @@ def plot_spot_state(
     file_name: str = "state_plot.png",
     step_range: Union[Tuple[int, int], int] = None,
 ):
-    from sim_transfer.sims.spot_sim_config import (
-    SPOT_STATE_LABELS,
-    SPOT_STATE_LABELS_ENCODED,
-    SPOT_ACTION_LABELS,
-    SPOT_STATE_LENGTH,
-    SPOT_STATE_LENGTH_ENCODED,
-    SPOT_ACTION_LENGTH,
-    )
-    import time
-    import os
+    """Plots the state trajectory of the Spot robot"""
 
     if step_range is not None:
         if isinstance(step_range, int):
@@ -299,8 +305,8 @@ def plot_spot_state(
             col_idx = 0 if idx < 6 else 1 if idx < 12 else 2
             row_idx = idx if idx < 6 else idx - 6 if idx < 12 else idx - 12
         ax = axs[row_idx, col_idx]
-        ax.plot(x[:, idx], label="x")
-        ax.plot(y[:, idx], label="y")
+        ax.plot(x[:, idx], label="true")
+        ax.plot(y[:, idx], label="pred", linestyle="--")
         ax.set_title(state_labels[idx])
         y_limit, y_unit = get_state_type(idx)
         ax.set_ylim(y_limit[0] - margin, y_limit[1] + margin)
@@ -353,15 +359,12 @@ def plot_spot_trajectory(
     rewards = traj.reward
     next_observations = traj.next_observation
     print("Plotting observations with shape", observations.shape)
-    assert (
-        observations.shape[-1] == 15
-        or observations.shape[-1] == 16
-        or observations.shape[-1] == 24
-        or observations.shape[-1] == 28
-    )
+
+    # check observations shape
 
     # decode angles
-    if observations.shape[-1] == 28:
+    # TODO: fix goal dims
+    if observations.shape[-1] == 46:
         # need to decode 2, 12, 13, 14
         observations = decode_angles(observations, 2)
         next_observations = decode_angles(next_observations, 2)
@@ -373,7 +376,7 @@ def plot_spot_trajectory(
         next_observations = decode_angles(next_observations, 14)
 
     # define idxs
-    goal_dim = 6
+    goal_dim = SPOT_GOAL_LENGTH
     action_dim = 9
     state_dim = 18
 
@@ -475,15 +478,19 @@ def plot_spot_trajectory(
             ax3.set_ylim(0, 2)
             ax3.legend()
             ax3.grid(True)
+            from scipy.spatial.transform import Rotation as R
 
             # EE-Orient-Goal Distance
             for idx, data in enumerate(traj_curr):
                 ee_orient = data[:, 12:15]
-                goal_orient = data[:, state_dim + 3 : state_dim + 6]
-                # cast both to [-pi, pi]
-                ee_orient = (ee_orient + np.pi) % (2 * np.pi) - np.pi
-                goal_orient = (goal_orient + np.pi) % (2 * np.pi) - np.pi
-                distance = np.linalg.norm(ee_orient - goal_orient, axis=1)
+                # TODO: fix goal dims
+                goal_orient = data[:, state_dim: state_dim + 6]
+                # decode goal angles
+                goal_orient = decode_angles_spot(goal_orient, angle_idx=[0, 1, 2])
+                observed_rotation = R.from_euler("xyz", ee_orient, degrees=False)
+                goal_rotation = R.from_euler("xyz", goal_orient, degrees=False)
+                relative_rotation = observed_rotation.inv() * goal_rotation
+                distance = relative_rotation.magnitude()
                 time_steps = np.arange(data.shape[0])
                 ax4.plot(
                     time_steps,
@@ -553,7 +560,10 @@ def plot_spot_trajectory(
             ee_orient_goal_error = []
             for traj in trajs:
                 ee_orient = traj[:, 12:15]
-                goal_orient = traj[:, state_dim + 3 : state_dim + 6]
+                # TODO: fix goal dims
+                goal_orient = traj[:, state_dim: state_dim + 6]
+                # decode goal angles
+                goal_orient = decode_angles_spot(goal_orient, angle_idx=[0, 1, 2])
                 observed_rotation = R.from_euler("xyz", ee_orient, degrees=False)
                 goal_rotation = R.from_euler("xyz", goal_orient, degrees=False)
                 relative_rotation = observed_rotation.inv() * goal_rotation
@@ -661,8 +671,9 @@ def sample_pos_and_goal_spot(
     rng_key: jax.random.PRNGKey,
     domain_lower: jnp.array,
     domain_upper: jnp.array,
-    goal_dim_with_ee_orientation: int = 6,
-    state_dim_with_ee_orientation: int = 18,
+    # TODO: Fix goal dims
+    goal_dim_with_ee_orientation: int = SPOT_GOAL_LENGTH,
+    state_dim_with_ee_orientation: int = SPOT_STATE_LENGTH,
     standard_init_state_with_ee_orientation: jnp.array = jnp.array(
         [
             0.0,
@@ -679,7 +690,7 @@ def sample_pos_and_goal_spot(
             0.0,
             0.0,
             0.0,
-            0.0,
+            jnp.pi/2,
             0.0,
             0.0,
             0.0,
@@ -888,7 +899,13 @@ def sample_pos_and_goal_spot(
 
         # make only zeros for now
         ee_orientation_goal = jnp.zeros_like(ee_orientation_goal)
-        init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z]), ee_orientation_goal])
+        # set yaw to pi/2
+        ee_orientation_goal = jnp.array([0.0, 0.0, jnp.pi/2])
+        # TODO: fix goal dim
+        # encode goal as sin, cos
+        ee_orientation_goal = encode_angles_spot(ee_orientation_goal, [0, 1, 2])
+        init_goal = ee_orientation_goal
+        # init_goal = jnp.concatenate([goal_xy, jnp.array([goal_z]), ee_orientation_goal])
     else:
         init_goal = standard_init_goal[:3] + jax.random.uniform(
             key_goal, shape=(3,), minval=-margins[6:9], maxval=margins[6:9]
@@ -907,7 +924,13 @@ def sample_pos_and_goal_spot(
         )
         # make only zeros for now
         init_goal_ee = jnp.zeros_like(init_goal_ee)
-        init_goal = jnp.concatenate([init_goal, init_goal_ee])
+        # set yaw to pi/2
+        init_goal_ee = jnp.array([0.0, 0.0, jnp.pi/2])
+        # TODO: fix goal dim
+        # encode goal as sin, cos
+        init_goal_ee = encode_angles_spot(init_goal_ee, [0, 1, 2])
+        init_goal = init_goal_ee
+        # init_goal = jnp.concatenate([init_goal, init_goal_ee])
 
     assert init_goal.shape == (
         goal_dim,

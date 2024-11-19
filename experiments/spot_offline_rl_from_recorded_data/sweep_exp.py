@@ -39,11 +39,11 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     parameters_rl = {
         # parameters rl
         "horizon_len": [100],
-        "sac_num_env_steps": [3_500_000],
+        "sac_num_env_steps": [2_500_000],
         "best_policy": [1],
         "margin_factor": [10.0],
         "ctrl_cost_weight": [0.01],
-        "ctrl_diff_weight": [0.00],
+        "ctrl_diff_weight": [0.0],
         "share_of_x0s_in_sac_buffer": [0.5],
         "eval_only_on_init_states": [1],
         "eval_on_all_offline_data": [1],
@@ -63,7 +63,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "likelihood_exponent": [1.0],
         "bandwidth_svgd": [5.0],
         "num_epochs": [100],
-        "max_train_steps": [200_000],
+        "max_train_steps": [100_000],
         "min_train_steps": [10_000],
         "num_sim_fitting_steps": [40_000],
         "length_scale_aditive_sim_gp": [1.0],
@@ -109,7 +109,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 if __name__ == "__main__":
     """Experiment settings"""
     # models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
-    models = ["bnn-sim-fsvgd"]
+    models = ["sim-model"]
     mode = "local"
     num_cpus = 1
     num_gpus = 1

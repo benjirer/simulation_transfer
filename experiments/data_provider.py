@@ -503,27 +503,27 @@ def _prepare_spot_datasets(
     # add goal to the state
     if add_goal:
         # steps to look ahead
-        k = 10
+        k = 4
 
         # define starting and ending indices for position and orientation
         pos_goal_start_idx = 7 if encode_angles else 6
         pos_goal_end_idx = pos_goal_start_idx + 3
-        orient_goal_start_idx = 12
-        orient_goal_end_idx = orient_goal_start_idx + 3
+        orient_goal_start_idx = 13 if encode_angles else 12
+        orient_goal_end_idx = orient_goal_start_idx + 6
 
         # extract goals
         pos_goal = y[k:, pos_goal_start_idx:pos_goal_end_idx]
-        orient_goal = y_raw[k:, orient_goal_start_idx:orient_goal_end_idx]
-        # for now: make zeros
-        # orient_goal = jnp.zeros_like(orient_goal)
-        goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
+        orient_goal = y[k:, orient_goal_start_idx:orient_goal_end_idx]
+        # TODO: fix goal dims
+        goal = orient_goal
+        # goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
 
         # padding for the last goal (repeat the last goal k times)
         last_pos_goal = y[-1, pos_goal_start_idx:pos_goal_end_idx]
-        last_orient_goal = y_raw[-1, orient_goal_start_idx:orient_goal_end_idx]
-        # for now: make zeros
-        # last_orient_goal = jnp.zeros_like(last_orient_goal)
-        last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
+        last_orient_goal = y[-1, orient_goal_start_idx:orient_goal_end_idx]
+        # TODO: Fix goal dims
+        # last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
+        last_goal = last_orient_goal
         padding = jnp.tile(last_goal, (k, 1))
         goal = jnp.concatenate([goal, padding], axis=0)
 

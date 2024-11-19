@@ -159,7 +159,16 @@ class RLFromOfflineData:
         print("Last actions shape:", last_actions.shape)
         print("Y train shape:", y_train.shape)
         # prepare transitions
-        rewards = jnp.zeros(shape=(x_train.shape[0],))
+        reward_gen_sim = SpotSimEnv(
+            encode_angle=True,
+            margin_factor=self.spot_reward_kwargs["margin_factor"],
+            ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
+            ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+        )
+
+        reward_gen = reward_gen_sim._reward_model
+
+        rewards = vmap(reward_gen.forward)(states_obs, last_actions, next_state_obs)
         discounts = 0.99 * jnp.ones(shape=(x_train.shape[0],))
         transitions = Transition(
             observation=jnp.concatenate([states_obs, framestacked_actions], axis=-1),
@@ -816,13 +825,13 @@ class RLFromOfflineData:
             sys_state = learned_spot_system.step(
                 x=state, u=action, system_params=sys_params
             )
-            new_state = sys_state.x_next
+            new_state = sys_state.x_next                
             transition = Transition(
-                observation=state[: self.state_dim_with_goal],
+                observation=state[: self.state_dim_with_goal + self.num_frame_stack * self.action_dim],
                 action=action,
                 reward=sys_state.reward,
                 discount=jnp.array(0.99),
-                next_observation=new_state[: self.state_dim_with_goal],
+                next_observation=new_state[: self.state_dim_with_goal + self.num_frame_stack * self.action_dim],
             )
             new_carry = (new_state, sys_state.system_params)
             return new_carry, transition
