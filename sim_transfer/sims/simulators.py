@@ -2011,9 +2011,6 @@ class StackedActionSimWrapper(FunctionSimulator):
 
 
 from sim_transfer.sims.spot_sim_config import (
-    SPOT_STATE_MASK,
-    SPOT_ACTION_MASK,
-    SPOT_GOAL_MASK,
     SPOT_STATE_LENGTH,
     SPOT_STATE_LENGTH_ENCODED,
     SPOT_ACTION_LENGTH,
@@ -2158,22 +2155,16 @@ class SpotSim(FunctionSimulator):
     @property
     def normalization_stats(self) -> Dict[str, jnp.ndarray]:
         from sim_transfer.sims.spot_sim_config import (
-            SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE,
-            SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION,
+            SPOT_MODEL_NORMALIZATION_STATS,
+            SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE,
         )
 
         if self.encode_angle:
-            x_std = SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE[
-                "x_std"
-            ]
-            y_std = SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION_ENCODED_ANGLE[
-                "y_std"
-            ]
             stats = {
                 "x_mean": jnp.zeros(self.input_size),
-                "x_std": x_std,
+                "x_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["x_std"],
                 "y_mean": jnp.zeros(self.output_size),
-                "y_std": y_std,
+                "y_std": SPOT_MODEL_NORMALIZATION_STATS_ENCODED_ANGLE["y_std"],
             }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
@@ -2181,9 +2172,9 @@ class SpotSim(FunctionSimulator):
         else:
             stats = {
                 "x_mean": jnp.zeros(self.input_size),
-                "x_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["x_std"],
+                "x_std": SPOT_MODEL_NORMALIZATION_STATS["x_std"],
                 "y_mean": jnp.zeros(self.output_size),
-                "y_std": SPOT_MODEL_NORMALIZATION_STATS_WITH_EE_ORIENTATION["y_std"],
+                "y_std": SPOT_MODEL_NORMALIZATION_STATS["y_std"],
             }
             assert (
                 stats["x_mean"].shape == stats["x_std"].shape == (self.input_size,)
@@ -2256,12 +2247,12 @@ class SpotSim(FunctionSimulator):
 
     def _set_default_params(self):
         from sim_transfer.sims.spot_sim_config import (
-            SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION,
-            BOUNDS_SPOT_MODEL_PARAMS_WITH_EE_ORIENTATION,
+            SPOT_DEFAULT_PARAMS,
+            BOUNDS_SPOT_MODEL_PARAMS,
         )
 
-        self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
-        self._bounds_spot_model_params = BOUNDS_SPOT_MODEL_PARAMS_WITH_EE_ORIENTATION
+        self._default_spot_model_params = SPOT_DEFAULT_PARAMS
+        self._bounds_spot_model_params = BOUNDS_SPOT_MODEL_PARAMS
 
 
 if __name__ == "__main__":

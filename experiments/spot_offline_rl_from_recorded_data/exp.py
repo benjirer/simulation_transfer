@@ -4,8 +4,9 @@ import jax.nn
 import jax.random as jr
 import wandb
 import os
+from typing import Union
 
-from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED, sample_from_spot_sim
+from experiments.data_provider import provide_data_and_sim, _SPOT_NOISE_STD_ENCODED
 from sim_transfer.rl.spot_rl_on_offline_data import RLFromOfflineData
 
 # imports for model
@@ -25,8 +26,12 @@ def experiment(
     sac_num_env_steps: int,
     best_policy: int,
     margin_factor: float,
+    bound: float,
     ctrl_cost_weight: float,
     ctrl_diff_weight: float,
+    base_linear_action_cost_weight: float,
+    base_theta_action_cost_weight: float,
+    ee_action_cost_weight: float,
     num_offline_collected_transitions: int,
     share_of_x0s_in_sac_buffer: float,
     eval_only_on_init_states: int,
@@ -57,6 +62,22 @@ def experiment(
     num_sim_fitting_steps: int = 40_000,
     length_scale_aditive_sim_gp: float = 1.0,
     lr: float = 3e-4,
+    OUTPUTSCALE_SPOT: list = [
+        0.2, # base x
+        0.2, # base y
+        0.02, # base sin theta
+        0.02, # base cos theta
+        0.02, # base vx
+        0.02, # base vy
+        0.02, # base vtheta
+        0.2, # ee x
+        0.2, # ee y
+        0.2, # ee z
+        0.02, # ee vx
+        0.02, # ee vy
+        0.02, # ee vz
+    ],
+
 ):
     # can only use one model at a time
     assert not (use_sim_prior and use_sim_model), "Can only use one model at a time"
@@ -88,6 +109,10 @@ def experiment(
         ctrl_cost_weight=ctrl_cost_weight,
         margin_factor=margin_factor,
         ctrl_diff_weight=ctrl_diff_weight,
+        base_linear_action_cost_weight=base_linear_action_cost_weight,
+        base_theta_action_cost_weight=base_theta_action_cost_weight,
+        ee_action_cost_weight=ee_action_cost_weight,
+        bound=bound,
     )
 
     NUM_ENV_STEPS_BETWEEN_UPDATES = 16
@@ -131,8 +156,12 @@ def experiment(
         sac_num_env_steps=sac_num_env_steps,
         best_policy=best_policy,
         margin_factor=margin_factor,
+        bound=bound,
         ctrl_diff_weight=ctrl_diff_weight,
         ctrl_cost_weight=ctrl_cost_weight,
+        base_linear_action_cost_weight=base_linear_action_cost_weight,
+        base_theta_action_cost_weight=base_theta_action_cost_weight,
+        ee_action_cost_weight=ee_action_cost_weight,
         num_offline_collected_transitions=num_offline_collected_transitions,
         share_of_x0s_in_sac_buffer=share_of_x0s_in_sac_buffer,
         eval_only_on_init_states=eval_only_on_init_states,
@@ -157,6 +186,7 @@ def experiment(
         num_sim_fitting_steps=num_sim_fitting_steps,
         length_scale_aditive_sim_gp=length_scale_aditive_sim_gp,
         likelihood_exponent=likelihood_exponent,
+        OUTPUTSCALE_SPOT=OUTPUTSCALE_SPOT,
     )
 
     total_config = SAC_KWARGS | config_dict | spot_reward_kwargs
@@ -189,116 +219,8 @@ def experiment(
         data_seed=int(int_data_seed),
     )
 
-    # # TODO Temporary: only predict include ee orientation and angular velocity
-    # x_train_state = x_train[..., 13:22]
-    # x_test_state = x_test[..., 13:22]
-    # x_train_action = x_train[..., 22+6+6:22+6+9]
-    # x_test_action = x_test[..., 22+6+6:22+6+9]
-    # x_train = jax.numpy.concatenate([x_train_state, x_train_action], axis=-1)
-    # x_test = jax.numpy.concatenate([x_test_state, x_test_action], axis=-1)
-    # y_train = y_train[..., 13:22]
-    # y_test = y_test[..., 13:22]
-
-    # # plot states
-    # import matplotlib.pyplot as plt
-    # fig, axs = plt.subplots(9, 2, figsize=(10, 10))
-    # for i in range(9):
-    #     axs[i, 0].plot(x_train[:20, i], label="x")
-    #     axs[i, 0].plot(y_train[:20, i], label="y")
-    #     axs[i, 0].legend()
-    # for i in range(3):
-    #     axs[i, 1].plot(x_train_action[:20, i], label="action")
-    #     axs[i, 1].legend()
-
-    # # save fig
-    # if wandb_logging:
-    #     wandb.log({"states": wandb.Image(plt)})
-
-    # # temp domain and temp normalization stats
-    # temp_lower = jax.numpy.array(
-    #     [
-    #         # ee orientation
-    #         -jax.numpy.pi,
-    #         -jax.numpy.pi,
-    #         -jax.numpy.pi,
-    #         # ee angular vel
-    #         -2.5,
-    #         -2.5,
-    #         -2.5,
-    #         # ee angular action
-    #         -2.5,
-    #         -2.5,
-    #         -2.5,
-    #     ]
-    # )
-
-    # temp_upper = jax.numpy.array(
-    #     [
-    #         # ee orientation
-    #         jax.numpy.pi,
-    #         jax.numpy.pi,
-    #         jax.numpy.pi,
-    #         # ee angular vel
-    #         2.5,
-    #         2.5,
-    #         2.5,
-    #         # ee angular action
-    #         2.5,
-    #         2.5,
-    #         2.5,
-    #     ]
-    # )
-
-    # temp_angle_idx = [0, 1, 2]
-    # from sim_transfer.sims.domain import Domain, HypercubeDomain, HypercubeDomainWithAngles
-
-    # temp_domain = HypercubeDomainWithAngles(
-    #     temp_angle_idx, temp_lower, temp_upper, 
-    # )
-    # # temp_domain = HypercubeDomain(
-    # #     temp_lower, temp_upper
-    # # )
-
-    # temp_x_std = jax.numpy.array(
-    #     [
-    #         0.714,
-    #         0.699,
-    #         0.541,
-    #         0.22,
-    #         0.71,
-    #         0.659,
-    #         1.02,
-    #         1.0,
-    #         1.016,
-    #         1.349,
-    #         1.357,
-    #         1.351,
-    #     ]
-    # )
-
-    # temp_y_std = jax.numpy.array(
-    #     [
-    #         0.714,
-    #         0.699,
-    #         0.542,
-    #         0.22,
-    #         0.711,
-    #         0.659,
-    #         1.02,
-    #         1.001,
-    #         1.016,
-    #     ]
-    # )
-
-    # temp_normalization_stats = {
-    #     "x_mean": jax.numpy.zeros(12), # TODO Temporary
-    #     "x_std": temp_x_std,
-    #     "y_mean": jax.numpy.zeros(9), # TODO Temporary
-    #     "y_std": temp_y_std,
-    # }
-
     print(
-        "Original data from provider: x_train.shape",
+        "[exp] Original data from provider: x_train.shape",
         x_train.shape,
         "y_train.shape",
         y_train.shape,
@@ -311,9 +233,7 @@ def experiment(
     # set up model
     standard_bnn_params = {
         "input_size": sim.input_size,
-        # "input_size": x_train.shape[-1], # TODO Temporary
         "output_size": sim.output_size, 
-        # "output_size": y_train.shape[-1], # TODO Temporary
         "rng_key": key_bnn,
         "likelihood_std": _SPOT_NOISE_STD_ENCODED,
         "normalize_data": True,
@@ -344,41 +264,16 @@ def experiment(
             use_base_bnn=False,
             num_sim_model_train_steps=num_sim_fitting_steps,
         )
+    
     # SIM-FSVGD
     elif use_sim_prior:
-        OUPUTSCALE_SPOT = [
-            0.2,  # base_x
-            0.2,  # base_y
-            0.02,  # base_theta_sin
-            0.02,  # base_theta_cos
-            0.02,  # base_vel_x
-            0.02,  # base_vel_y
-            0.02,  # base_ang_vel
-            0.2,  # ee_x
-            0.2,  # ee_y
-            0.02,  # ee_z
-            0.02,  # ee_vx
-            0.02,  # ee_vy
-            0.02,  # ee_vz
-            0.1, # ee_rx_sin
-            0.1, # ee_rx_cos
-            0.1, # ee_ry_sin
-            0.1, # ee_ry_cos
-            0.1, # ee_rz_sin
-            0.1, # ee_rz_cos
-            0.5, # ee_vrx
-            0.5, # ee_vry
-            0.5, # ee_vrz
-        ]
-        # OUPUTSCALE_SPOT = 1.0
-
         sim = AdditiveSim(
             base_sims=[
                 sim,
                 GaussianProcessSim(
                     sim.input_size,
                     sim.output_size,
-                    output_scale=OUPUTSCALE_SPOT,
+                    output_scale=OUTPUTSCALE_SPOT,
                     length_scale=length_scale_aditive_sim_gp,
                     consider_only_first_k_dims=None,
                 ),
@@ -399,6 +294,7 @@ def experiment(
             bandwidth_svgd=bandwidth_svgd,
             num_measurement_points=num_measurement_points,
         )
+    
     # BNN-FSVGD
     else:
         if predict_difference:
@@ -407,10 +303,8 @@ def experiment(
         model = BNN_FSVGD(
             **standard_bnn_params,
             normalization_stats=sim.normalization_stats, 
-            # normalization_stats=temp_normalization_stats, # TODO Temporary
             num_train_steps=bnn_train_steps,
             domain=sim.domain,
-            # domain=temp_domain, # TODO Temporary
             lr=lr,
             bandwidth_svgd=bandwidth_svgd,
         )
@@ -462,12 +356,6 @@ def experiment(
     #     return_best_bnn=bool(best_bnn_model),
     # )
 
-    # # train model only
-    # bnn_model = rl_from_offline_data.train_model(
-    #     bnn_train_steps=bnn_train_steps,
-    #     return_best_bnn=bool(best_bnn_model),
-    # )
-
     skip_eval = False
     if not skip_eval:
         # evaluate learned model
@@ -478,12 +366,12 @@ def experiment(
             policy,
             bnn_model,
             key=key_evaluation_trained_bnn,
-            num_evals=30,
-            save_traj_dir=(
-                f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
-                if save_traj_local
-                else None
-            ),
+            num_evals=10,
+            # save_traj_dir=(
+            #     f"/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/policies_traj/bnn/{wandb.run.id}"
+            #     if save_traj_local
+            #     else None
+            # ),
         )
 
         # # evaluate policy on default simulator
@@ -512,8 +400,12 @@ def main(args):
         sac_num_env_steps=args.sac_num_env_steps,
         best_policy=args.best_policy,
         margin_factor=args.margin_factor,
+        bound=args.bound,
         ctrl_cost_weight=args.ctrl_cost_weight,
         ctrl_diff_weight=args.ctrl_diff_weight,
+        base_linear_action_cost_weight=args.base_linear_action_cost_weight,
+        base_theta_action_cost_weight=args.base_theta_action_cost_weight,
+        ee_action_cost_weight=args.ee_action_cost_weight,
         num_offline_collected_transitions=args.num_offline_collected_transitions,
         test_data_ratio=args.test_data_ratio,
         share_of_x0s_in_sac_buffer=args.share_of_x0s_in_sac_buffer,
@@ -557,8 +449,12 @@ if __name__ == "__main__":
     parser.add_argument("--project_name", type=str, default="testing")
     parser.add_argument("--best_policy", type=int, default=1)
     parser.add_argument("--margin_factor", type=float, default=5.0)
+    parser.add_argument("--bound", type=float, default=0.5)
     parser.add_argument("--ctrl_cost_weight", type=float, default=0.01)
     parser.add_argument("--ctrl_diff_weight", type=float, default=0.01)
+    parser.add_argument("--base_linear_action_cost_weight", type=float, default=5.0)
+    parser.add_argument("--base_theta_action_cost_weight", type=float, default=5.0)
+    parser.add_argument("--ee_action_cost_weight", type=float, default=0.5)
     parser.add_argument("--num_offline_collected_transitions", type=int, default=5_000)
     parser.add_argument("--test_data_ratio", type=float, default=0.1)
     parser.add_argument("--share_of_x0s_in_sac_buffer", type=float, default=0.5)

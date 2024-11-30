@@ -60,14 +60,8 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
             0.0,
             0.0,
             0.914,
-            0.05,
+            0.0,
             0.7,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
             0.0,
             0.0,
             0.0,
@@ -161,12 +155,12 @@ class SpotDynamics(Dynamics[SpotDynamicsParams]):
 
     def _set_default_params(self):
         from sim_transfer.sims.spot_sim_config import (
-            SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION,
-            SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+            SPOT_DEFAULT_PARAMS,
+            SPOT_DEFAULT_OBSERVATION_NOISE_STD,
         )
 
-        self._default_spot_model_params = SPOT_DEFAULT_PARAMS_WITH_EE_ORIENTATION
-        self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION
+        self._default_spot_model_params = SPOT_DEFAULT_PARAMS
+        self._obs_noise_stds = SPOT_DEFAULT_OBSERVATION_NOISE_STD
 
     def _state_to_obs(self, state: jnp.array, rng_key: chex.PRNGKey) -> jnp.array:
         """Adds observation noise to the state"""
@@ -264,6 +258,9 @@ class SpotReward(Reward[SpotRewardParams]):
         self,
         ctrl_cost_weight: float = 0.005,
         ctrl_diff_weight: float = 0.0,
+        base_linear_action_cost_weight: float = 5.0,
+        base_theta_action_cost_weight: float = 5.0,
+        ee_action_cost_weight: float = 0.5,
         encode_angle: bool = False,
         bound: float = 0.1,
         margin_factor: float = 10.0,
@@ -288,6 +285,9 @@ class SpotReward(Reward[SpotRewardParams]):
         self.dim_goal = dim_goal
         self._reward_model = SpotEnvReward(
             ctrl_cost_weight=ctrl_cost_weight,
+            base_linear_action_cost_weight=base_linear_action_cost_weight,
+            base_theta_action_cost_weight=base_theta_action_cost_weight,
+            ee_action_cost_weight=ee_action_cost_weight,
             encode_angle=self.encode_angle,
             bound=bound,
             margin_factor=margin_factor,
@@ -324,7 +324,7 @@ class SpotReward(Reward[SpotRewardParams]):
         if self.num_frame_stack > 0:
             u_prev = actions_stacked[-self.u_dim :]
             u_base_penalty = self.ctrl_diff_weight * jnp.sum((u[:3] - u_prev[:3]) ** 2)
-            u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:9] - u_prev[3:9]) ** 2)
+            u_ee_penalty = self.ctrl_diff_weight * jnp.sum((u[3:] - u_prev[3:]) ** 2)
             reward -= 2.0 * u_base_penalty + 0.5 * u_ee_penalty
         return Normal(reward, jnp.zeros_like(reward)), reward_params
 
@@ -424,6 +424,9 @@ class SpotSystem(System[SpotDynamicsParams, SpotRewardParams]):
         spot_obs_noise_std: jnp.array = None,
         ctrl_cost_weight: float = 0.005,
         ctrl_diff_weight: float = 0.01,
+        base_linear_action_cost_weight: float = 5.0,
+        base_theta_action_cost_weight: float = 5.0,
+        ee_action_cost_weight: float = 0.5,
         use_obs_noise: bool = True,
         bound: float = 0.1,
         margin_factor: float = 10.0,
@@ -445,6 +448,9 @@ class SpotSystem(System[SpotDynamicsParams, SpotRewardParams]):
             reward=SpotReward(
                 ctrl_cost_weight=ctrl_cost_weight,
                 ctrl_diff_weight=ctrl_diff_weight,
+                base_linear_action_cost_weight=base_linear_action_cost_weight,
+                base_theta_action_cost_weight=base_theta_action_cost_weight,
+                ee_action_cost_weight=ee_action_cost_weight,
                 encode_angle=encode_angle,
                 bound=bound,
                 margin_factor=margin_factor,

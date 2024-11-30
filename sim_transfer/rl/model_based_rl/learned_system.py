@@ -164,7 +164,6 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         ) and u.shape == (self._u_dim,)
 
         # remove goal from state
-        print("x_raw shape", x_raw.shape)
         x_raw_unaugmented = x_raw[: self._x_dim]
         frame_stack = x_raw[
             self._x_dim : self._x_dim + self._u_dim * self.num_frame_stack
@@ -172,7 +171,6 @@ class LearnedSpotDynamics(Dynamics[DynamicsParams]):
         goal = x_raw_unaugmented[self._x_dim_no_goal : self._x_dim]
         x_unaugmented_no_goal = x_raw_unaugmented[: self._x_dim_no_goal]
         x = jnp.concatenate([x_unaugmented_no_goal, frame_stack])
-        print("x shape", x.shape)
         assert x.shape == (
             self._x_dim_no_goal + self._u_dim * self.num_frame_stack,
         ), "x shape is wrong, expected {}, got {}".format(

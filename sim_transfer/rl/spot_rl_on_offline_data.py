@@ -126,10 +126,6 @@ class RLFromOfflineData:
         self.state_dim = SPOT_STATE_LENGTH_ENCODED
         self.action_dim = SPOT_ACTION_LENGTH
         self.goal_dim = SPOT_GOAL_LENGTH
-        # TODO Temporary
-        # self.state_dim = 9
-        # self.action_dim = 3
-        # self.goal_dim = 0
         self.state_dim_with_goal = self.state_dim + self.goal_dim
 
         # account for frame stacking (augmenting state with actions)
@@ -158,17 +154,24 @@ class RLFromOfflineData:
 
         print("Last actions shape:", last_actions.shape)
         print("Y train shape:", y_train.shape)
+        
         # prepare transitions
         reward_gen_sim = SpotSimEnv(
             encode_angle=True,
             margin_factor=self.spot_reward_kwargs["margin_factor"],
             ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
             ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+            base_linear_action_cost_weight=self.spot_reward_kwargs[
+                "base_linear_action_cost_weight"
+            ],
+            base_theta_action_cost_weight=self.spot_reward_kwargs[
+                "base_theta_action_cost_weight"
+            ],
+            ee_action_cost_weight=self.spot_reward_kwargs["ee_action_cost_weight"],
+            bound=self.spot_reward_kwargs["bound"],
         )
-
-        reward_gen = reward_gen_sim._reward_model
-
-        rewards = vmap(reward_gen.forward)(states_obs, last_actions, next_state_obs)
+        rewards = vmap(reward_gen_sim._reward_model.forward)(states_obs, last_actions, next_state_obs)
+        rewards = jnp.zeros(shape=(x_train.shape[0],))
         discounts = 0.99 * jnp.ones(shape=(x_train.shape[0],))
         transitions = Transition(
             observation=jnp.concatenate([states_obs, framestacked_actions], axis=-1),
@@ -674,6 +677,14 @@ class RLFromOfflineData:
                 margin_factor=self.spot_reward_kwargs["margin_factor"],
                 ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
                 ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+                base_linear_action_cost_weight=self.spot_reward_kwargs[
+                    "base_linear_action_cost_weight"
+                ],
+                base_theta_action_cost_weight=self.spot_reward_kwargs[
+                    "base_theta_action_cost_weight"
+                ],
+                ee_action_cost_weight=self.spot_reward_kwargs["ee_action_cost_weight"],
+                bound=self.spot_reward_kwargs["bound"],
                 max_steps=self.sac_kwargs["episode_length"],
             )
             obs = sim.reset(key)
@@ -745,10 +756,7 @@ class RLFromOfflineData:
                     f"Trajectory_eval_on_{model_name}": wandb.Image(fig_eval),
                     f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
                     f"mean_pos_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps[0]
-                    ),
-                    f"mean_orient_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps[1]
+                        mean_error_after_10_steps
                     ),
                     f"reward_mean_on_{model_name}": float(reward_mean),
                     f"reward_std_on_{model_name}": float(reward_std),
@@ -785,15 +793,40 @@ class RLFromOfflineData:
     ):
         """Evaluate policy on the learned model"""
 
+        # import goal trajectory
+        goal_file_path = "/home/bhoffman/Documents/MT_FS24/simulation_transfer/results/goal_traj/infinity_goal_trajectory.pkl"
+        goal_trajectory_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), goal_file_path
+        )
+        with open(goal_trajectory_path, "rb") as handle:
+            goal_trajectory = pickle.load(handle)
+        goal_trajectory = jnp.array(goal_trajectory)
+
         # set parameters
-        eval_horizon = self.sac_kwargs["episode_length"]
+        # eval_horizon = self.sac_kwargs["episode_length"]
+        eval_horizon = len(goal_trajectory)
         model_name = "pretrained_model" if bnn_model is None else "learned_model"
         init_stacked_actions = jnp.zeros(
             shape=(self.num_frame_stack * self.action_dim,)
         )
 
         # create simulator
-        sim = SpotSimEnv(encode_angle=True)
+        sim = SpotSimEnv(
+            encode_angle=True,
+            action_delay=1 / 15.0 * self.num_frame_stack,
+            ctrl_cost_weight=self.spot_reward_kwargs["ctrl_cost_weight"],
+            ctrl_diff_weight=self.spot_reward_kwargs["ctrl_diff_weight"],
+            margin_factor=self.spot_reward_kwargs["margin_factor"],
+            base_linear_action_cost_weight=self.spot_reward_kwargs[
+                "base_linear_action_cost_weight"
+            ],
+            base_theta_action_cost_weight=self.spot_reward_kwargs[
+                "base_theta_action_cost_weight"
+            ],
+            ee_action_cost_weight=self.spot_reward_kwargs["ee_action_cost_weight"],
+            bound=self.spot_reward_kwargs["bound"],
+            max_steps=eval_horizon,
+        )
 
         # handle keys
         key_init_obs, key_generate_trajectories = jr.split(key)
@@ -819,34 +852,38 @@ class RLFromOfflineData:
         )
 
         # simulation step
-        def f_step(carry, _):
+        def f_step(carry, current_goal):
             state, sys_params = carry
+            # update state with current goal
+            state = jnp.concatenate([state[:self.state_dim], current_goal, state[self.state_dim_with_goal:]], axis=-1)
             action = policy(state)
-            sys_state = learned_spot_system.step(
-                x=state, u=action, system_params=sys_params
-            )
-            new_state = sys_state.x_next                
+            sys_state = learned_spot_system.step(x=state, u=action, system_params=sys_params)
+            new_state = sys_state.x_next
+            # update next state with current goal
+            new_state = jnp.concatenate([new_state[:self.state_dim], current_goal, new_state[self.state_dim_with_goal:]], axis=-1)
             transition = Transition(
-                observation=state[: self.state_dim_with_goal + self.num_frame_stack * self.action_dim],
+                observation=state[: self.state_dim_with_goal],
                 action=action,
                 reward=sys_state.reward,
                 discount=jnp.array(0.99),
-                next_observation=new_state[: self.state_dim_with_goal + self.num_frame_stack * self.action_dim],
+                next_observation=new_state[: self.state_dim_with_goal],
             )
             new_carry = (new_state, sys_state.system_params)
             return new_carry, transition
 
         # simulation loop
-        def get_trajectory_transitions(init_obs, key):
+        def get_trajectory_transitions(init_obs, key, goal_trajectory):
             sys_params = learned_spot_system.init_params(key)
             state = jnp.concatenate([init_obs, init_stacked_actions], axis=-1)
             last_carry, transitions = scan(
-                f_step, (state, sys_params), None, length=eval_horizon
+                f_step, (state, sys_params), xs=goal_trajectory, length=eval_horizon
             )
             return transitions
 
         # get trajectories
-        trajectories = vmap(get_trajectory_transitions)(obs, key_generate_trajectories)
+        trajectories = vmap(
+            get_trajectory_transitions, in_axes=(0, 0, None)
+        )(obs, key_generate_trajectories, goal_trajectory)
 
         # get rewards
         rewards = jnp.sum(trajectories.reward, axis=-1)
@@ -877,10 +914,7 @@ class RLFromOfflineData:
                     f"Trajectory_eval_on_{model_name}": wandb.Image(fig),
                     f"Distance_eval_on_{model_name}": wandb.Image(fig_distance),
                     f"mean_pos_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps[0]
-                    ),
-                    f"mean_orient_error_after_10_steps_on_{model_name}": float(
-                        mean_error_after_10_steps[1]
+                        mean_error_after_10_steps
                     ),
                     f"reward_mean_on_{model_name}": float(reward_mean),
                     f"reward_std_on_{model_name}": float(reward_std),
@@ -906,99 +940,86 @@ class RLFromOfflineData:
 
             print(f"Trajectories (all and mean reward) saved in {save_traj_dir}")
 
+
     def eval_model_on_dedicated_data(
         self,
         bnn_model: BatchedNeuralNetworkModel = None,
-        step_range: int = 150,
+        plot_errors: bool = False,
     ):
-        """Evaluate model on the dedicated set of data."""
+        """Evaluate model on dedicated set of data."""
 
-        # load measured data for testing and eval
+        # load measured data for testing and evaluation
         DATA_DIR = os.path.join(
             os.path.dirname(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             ),
             "data",
         )
-
-        dir_path = os.path.join(DATA_DIR, "test_data_spot_ee_v1")
+        test_data_dir = os.path.join(DATA_DIR, "test_data_spot_ee_v1")
         eval_trajectories_paths = sorted(
             [
-                os.path.join(dir_path, f)
-                for f in os.listdir(dir_path)
+                os.path.join(test_data_dir, f)
+                for f in os.listdir(test_data_dir)
                 if f.endswith(".pickle")
             ]
         )
-        eval_trajectories, eval_trajectories_id = _load_spot_datasets(
-            eval_trajectories_paths
-        ), [os.path.basename(f).split(".")[0] for f in eval_trajectories_paths]
+        eval_trajectories = _load_spot_datasets(eval_trajectories_paths)
+        eval_trajectories_ids = [os.path.basename(f).split(".")[0] for f in eval_trajectories_paths]
 
-        # setup extra eval metrics (rmse over all trajectories)
+        # setup extra evaluation metrics (rmse over all trajectories)
         extra_eval_metrics = {}
 
-        # iterate over eval trajectories
-        for traj, traj_id in zip(eval_trajectories, eval_trajectories_id):
+        # iterate over evaluation trajectories
+        for trajectory, traj_id in zip(eval_trajectories, eval_trajectories_ids):
             # unpack data
-            testing_x_pre_org = jnp.array([t.observation for t in traj])
-            testing_u_pre_org = jnp.array([t.action for t in traj])
-            testing_y_org = jnp.array([t.next_observation for t in traj])
+            observations_raw = jnp.array([t.observation for t in trajectory])
+            actions_raw = jnp.array([t.action for t in trajectory])
+            next_observations_raw = jnp.array([t.next_observation for t in trajectory])
 
-            from experiments.data_provider import transform_state_omega
-
-            # # transform state and omega
-            # testing_x_pre_org = transform_state_omega(testing_x_pre_org)
-            # testing_y_org = transform_state_omega(testing_y_org)
-
-            testing_y_org_raw = testing_y_org
+            # get relevant states
+            observations_raw = observations_raw[:, : SPOT_STATE_LENGTH_ENCODED]
+            actions_raw = actions_raw[:, : SPOT_ACTION_LENGTH]
+            next_observations_raw = next_observations_raw[:, : SPOT_STATE_LENGTH_ENCODED]
 
             # decode angles as they are encoded in raw data
-            testing_x_pre_org = decode_angles_spot_fn(testing_x_pre_org, SPOT_ANGLE_IDX)
-            testing_y_org = decode_angles_spot_fn(testing_y_org, SPOT_ANGLE_IDX)
+            observations_decoded = decode_angles_spot_fn(observations_raw, SPOT_ANGLE_IDX)
+            next_observations_decoded = decode_angles_spot_fn(next_observations_raw, SPOT_ANGLE_IDX)
 
-            # pre cut data
-            # skip forst 30%
-            skip_idx = int(0.3 * testing_x_pre_org.shape[0])
-            testing_x_pre_ORG = testing_x_pre_org[skip_idx:]
-            testing_u_pre_ORG = testing_u_pre_org[skip_idx:]
-            testing_y_ORG = testing_y_org[skip_idx:]
-            testing_y_org_raw_ORG = testing_y_org_raw[skip_idx:]
+            # pre-cut data
+            skip_idx = int(0.3 * observations_decoded.shape[0])
+            observations_decoded = observations_decoded[skip_idx:]
+            actions = actions_raw[skip_idx:]
+            next_observations_decoded = next_observations_decoded[skip_idx:]
 
-            # apply action delay
-            testing_u_pre_ORG = stack_spot_actions(
-                u=testing_u_pre_ORG,
+            # apply action delay and stack actions
+            actions_stacked = stack_spot_actions(
+                u=actions,
                 num_stacked_actions=self.num_frame_stack,
                 action_dim=self.action_dim,
-                # action_dim=9, # TODO Temporary
             )
 
-            # prepare data
-            testing_x_pre_ORG = encode_angles_spot_fn(testing_x_pre_ORG, SPOT_ANGLE_IDX)
-            testing_y_ORG = encode_angles_spot_fn(testing_y_ORG, SPOT_ANGLE_IDX)
-            testing_x_ORG = jnp.concatenate([testing_x_pre_ORG, testing_u_pre_ORG], axis=1)
+            # encode angles
+            observations_encoded = encode_angles_spot_fn(observations_decoded, SPOT_ANGLE_IDX)
+            next_observations_encoded = encode_angles_spot_fn(next_observations_decoded, SPOT_ANGLE_IDX)
 
-            # segments
+            # prepare model input
+            model_inputs = jnp.concatenate([observations_encoded, actions_stacked], axis=1)
+
+            # segment data into smaller parts if necessary
             max_segment_length = 100
-            segment_length = min(testing_x_ORG.shape[0], max_segment_length)
-            max_n_segments = 5
-            n_segments = min(testing_x_ORG.shape[0] // segment_length, max_n_segments)
+            segment_length = min(model_inputs.shape[0], max_segment_length)
+            max_num_segments = 5
+            num_segments = min(model_inputs.shape[0] // segment_length, max_num_segments)
 
-            for curs in range(n_segments):
-                # cut data
-                testing_x = testing_x_ORG[
-                    curs * segment_length : (curs + 1) * segment_length
-                ]
-                testing_u_pre = testing_u_pre_ORG[
-                    curs * segment_length : (curs + 1) * segment_length
-                ]
-                testing_y = testing_y_ORG[
-                    curs * segment_length : (curs + 1) * segment_length
-                ]
-                testing_y_org_raw = testing_y_org_raw_ORG[
-                    curs * segment_length : (curs + 1) * segment_length
-                ]
+            # iterate over segments
+            for segment_idx in range(num_segments):
+                # extract segment data
+                start_idx = segment_idx * segment_length
+                end_idx = (segment_idx + 1) * segment_length
 
-
-                from experiments.data_provider import sample_from_spot_sim
+                segment_inputs = model_inputs[start_idx:end_idx]
+                segment_actions = actions_stacked[start_idx:end_idx]
+                segment_targets = next_observations_encoded[start_idx:end_idx]
 
                 # prepare error metrics
                 model_errors_max_ee = {}
@@ -1007,288 +1028,218 @@ class RLFromOfflineData:
                 model_errors_total_base = {}
                 model_errors_max_base_theta = {}
                 model_errors_total_base_theta = {}
-                model_errors_max_ee_orient = {}
-                model_errors_total_ee_orient = {}
-
-                # simulate trajectory with learned model
-                # # TODO Temporary: only predict include ee orientation and angular velocity
-                # testing_u_pre = testing_u_pre[..., 6:9]
-                # testing_x_pre = testing_x_pre[..., 13:22]
-                # testing_x = jnp.concatenate([testing_x_pre, testing_u_pre], axis=1)
-                # testing_y = testing_y[..., 13:22]
 
                 model = bnn_model
                 model_name = "bnn_model"
-                y_pred_testing = []
-                x_state = testing_x[0:1]
-                for i in range(testing_x.shape[0] - 1):
+                predictions = []
+                current_state = segment_inputs[0:1]
 
+                for i in range(segment_inputs.shape[0] - 1):
                     # predict delta between current and next state
                     if self.predict_difference:
-                        delta_x, _ = model.predict(x_state)
-                        y_pred = x_state[..., : self.state_dim] + delta_x
-
-                    # predict next state directly
+                        delta_x, _ = model.predict(current_state)
+                        y_pred = current_state[..., : self.state_dim] + delta_x
                     else:
-                        y_pred, _ = model.predict(x_state)
+                        # predict next state directly
+                        y_pred, _ = model.predict(current_state)
 
-                    # append prediction, get next action / state
-                    y_pred_testing.append(y_pred[0])
-                    u_next = testing_u_pre[i + 1 : i + 2]
-                    x_state = jnp.concatenate([y_pred, u_next], axis=1)
-                y_pred_testing = jnp.array(y_pred_testing)
+                    # append prediction, get next action/state
+                    predictions.append(y_pred[0])
+                    next_action = segment_actions[i + 1 : i + 2]
+                    current_state = jnp.concatenate([y_pred, next_action], axis=1)
 
-                y_pred_testing_raw = y_pred_testing
-                # y_pred_testing = decode_angles_spot_fn(y_pred_testing, SPOT_ANGLE_IDX)
+                predictions = jnp.array(predictions)
 
-                # # TODO temporary plot
-                # fig = fig, axs = plt.subplots(9, 1, figsize=(10, 10))
-                # for i in range(9):
-                #     axs[i].plot(testing_y[:, i], label="true")
-                #     axs[i].plot(y_pred_testing[:, i], label="pred")
-                #     axs[i].legend()
+                predictions_raw = predictions
+                predictions_decoded = decode_angles_spot_fn(predictions, SPOT_ANGLE_IDX)
+
+                # adjust segment_targets to match the length of predictions
+                segment_targets = segment_targets[1:]
 
                 # plot trajectory
                 fig = plot_spot_state(
-                    x=decode_angles_spot_fn(testing_y, SPOT_ANGLE_IDX),
-                    u=testing_u_pre,
-                    y=decode_angles_spot_fn(y_pred_testing_raw, SPOT_ANGLE_IDX),
+                    x=decode_angles_spot_fn(segment_targets, SPOT_ANGLE_IDX),
+                    u=segment_actions,
+                    y=decode_angles_spot_fn(predictions_raw, SPOT_ANGLE_IDX),
                     encode_angle=False,
                     file_name=None,
                 )
 
-                # # calculate errors for plotting
-                # ee_pos_error_running = jnp.linalg.norm(
-                #     y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1
-                # )
-                # ee_pos_error_cumulative = jnp.cumsum(ee_pos_error_running)
-                # ee_pos_error_max = jnp.max(ee_pos_error_running)
-                # ee_pos_error_total = jnp.sum(ee_pos_error_running)
-                # model_errors_max_ee[model_name] = ee_pos_error_max
-                # model_errors_total_ee[model_name] = ee_pos_error_total
+                if plot_errors:
+                    # calculate errors for plotting
+                    ee_pos_error_running = jnp.linalg.norm(
+                        predictions_decoded[:, 6:9] - segment_targets[:, 6:9], axis=1
+                    )
+                    ee_pos_error_cumulative = jnp.cumsum(ee_pos_error_running)
+                    ee_pos_error_max = jnp.max(ee_pos_error_running)
+                    ee_pos_error_total = jnp.sum(ee_pos_error_running)
+                    model_errors_max_ee[model_name] = ee_pos_error_max
+                    model_errors_total_ee[model_name] = ee_pos_error_total
 
-                # base_pos_error_running = jnp.linalg.norm(
-                #     y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1
-                # )
-                # base_pos_error_cumulative = jnp.cumsum(base_pos_error_running)
-                # base_pos_error_max = jnp.max(base_pos_error_running)
-                # base_pos_error_total = jnp.sum(base_pos_error_running)
-                # model_errors_max_base[model_name] = base_pos_error_max
-                # model_errors_total_base[model_name] = base_pos_error_total
+                    base_pos_error_running = jnp.linalg.norm(
+                        predictions_decoded[:, 0:2] - segment_targets[:, 0:2], axis=1
+                    )
+                    base_pos_error_cumulative = jnp.cumsum(base_pos_error_running)
+                    base_pos_error_max = jnp.max(base_pos_error_running)
+                    base_pos_error_total = jnp.sum(base_pos_error_running)
+                    model_errors_max_base[model_name] = base_pos_error_max
+                    model_errors_total_base[model_name] = base_pos_error_total
 
-                # base_theta_error_running = jnp.linalg.norm(
-                #     y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1
-                # )
-                # base_theta_error_cumulative = jnp.cumsum(base_theta_error_running)
-                # base_theta_error_max = jnp.max(base_theta_error_running)
-                # base_theta_error_total = jnp.sum(base_theta_error_running)
-                # model_errors_max_base_theta[model_name] = base_theta_error_max
-                # model_errors_total_base_theta[model_name] = base_theta_error_total
+                    base_theta_error_running = jnp.linalg.norm(
+                        predictions_decoded[:, 2:3] - segment_targets[:, 2:3], axis=1
+                    )
+                    base_theta_error_cumulative = jnp.cumsum(base_theta_error_running)
+                    base_theta_error_max = jnp.max(base_theta_error_running)
+                    base_theta_error_total = jnp.sum(base_theta_error_running)
+                    model_errors_max_base_theta[model_name] = base_theta_error_max
+                    model_errors_total_base_theta[model_name] = base_theta_error_total
 
-                # ee_orient_error_running = jnp.linalg.norm(
-                #     y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
-                # )
-                # ee_orient_error_cumulative = jnp.cumsum(ee_orient_error_running)
-                # ee_orient_error_max = jnp.max(ee_orient_error_running)
-                # ee_orient_error_total = jnp.sum(ee_orient_error_running)
-                # model_errors_max_ee_orient[model_name] = ee_orient_error_max
-                # model_errors_total_ee_orient[model_name] = ee_orient_error_total
+                    # fill extra evaluation metrics for current trajectory
+                    for state_label in SPOT_STATE_LABELS:
+                        state_idx = SPOT_STATE_LABELS.index(state_label)
+                        state_error = (predictions_decoded[:, state_idx] - segment_targets[:, state_idx]) ** 2
+                        extra_eval_metrics[f"{state_label}_rmse"] = (
+                            extra_eval_metrics.get(f"{state_label}_rmse", jnp.zeros(state_error.shape))
+                            + state_error
+                        )
 
-                # # fill extra evals metrics for current trajectory
-                # for state_label in SPOT_STATE_LABELS:
-                #     state_idx = SPOT_STATE_LABELS.index(state_label)
-                #     state_error = (
-                #         y_pred_testing[:, state_idx] - testing_y[:, state_idx]
-                #     ) ** 2
-                #     extra_eval_metrics[f"{state_label}_rmse"] = (
-                #         extra_eval_metrics.get(
-                #             f"{state_label}_rmse", jnp.zeros(state_error.shape)
-                #         )
-                #         + state_error
-                #     )
-                # base_pos_error = (
-                #     jnp.linalg.norm(y_pred_testing[:, 0:2] - testing_y[:, 0:2], axis=1) ** 2
-                # )
-                # theta_error = (
-                #     jnp.linalg.norm(y_pred_testing[:, 2:3] - testing_y[:, 2:3], axis=1) ** 2
-                # )
-                # ee_pos_error = (
-                #     jnp.linalg.norm(y_pred_testing[:, 6:9] - testing_y[:, 6:9], axis=1) ** 2
-                # )
-                # extra_eval_metrics["base_pos_rmse"] = (
-                #     extra_eval_metrics.get("base_pos_rmse", jnp.zeros(base_pos_error.shape))
-                #     + base_pos_error
-                # )
-                # extra_eval_metrics["theta_rmse"] = (
-                #     extra_eval_metrics.get(
-                #         "theta_rmse", jnp.zeros(base_theta_error_running.shape)
-                #     )
-                #     + theta_error
-                # )
-                # extra_eval_metrics["ee_pos_rmse"] = (
-                #     extra_eval_metrics.get("ee_pos_rmse", jnp.zeros(ee_pos_error.shape))
-                #     + ee_pos_error
-                # )
-                # ee_orient_error = (
-                #     jnp.linalg.norm(
-                #         y_pred_testing[:, 12:15] - testing_y[:, 12:15], axis=1
-                #     )
-                #     ** 2
-                # )
-                # extra_eval_metrics["ee_orient_rmse"] = (
-                #     extra_eval_metrics.get(
-                #         "ee_orient_rmse", jnp.zeros(ee_orient_error.shape)
-                #     )
-                #     + ee_orient_error
-                # )
-
-                # detailed error plots
-                # prepare plots
-                # fig_ee_error, axs_ee_error = plt.subplots(8, 1, figsize=(30, 15))
-                # fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
-
-                # # prepare error plots
-                # axs_ee_error[0].set_title("Running ee position error")
-                # axs_ee_error[1].set_title("Running cumulative ee position error")
-                # axs_ee_error[2].set_title("Max ee position error")
-                # axs_ee_error[3].set_title("Total cumulative ee position error")
-                # axs_base_error[0, 0].set_title("Running base position error")
-                # axs_base_error[1, 0].set_title("Running cumulative base position error")
-                # axs_base_error[2, 0].set_title("Max base position error")
-                # axs_base_error[3, 0].set_title("Total cumulative base position error")
-                # axs_base_error[0, 1].set_title("Running base theta error")
-                # axs_base_error[1, 1].set_title("Running cumulative base theta error")
-                # axs_base_error[2, 1].set_title("Max base theta error")
-                # axs_base_error[3, 1].set_title("Total cumulative base theta error")
-                # axs_ee_error[4].set_title("Running ee orientation error")
-                # axs_ee_error[5].set_title("Running cumulative ee orientation error")
-                # axs_ee_error[6].set_title("Max ee orientation error")
-                # axs_ee_error[7].set_title("Total cumulative ee orientation error")
-
-                # # plot running and cumulative errors
-                # axs_ee_error[0].plot(ee_pos_error_running, label=f"{model_name}")
-                # axs_ee_error[1].plot(ee_pos_error_cumulative, label=f"{model_name}")
-
-                # axs_base_error[0, 0].plot(base_pos_error_running, label=f"{model_name}")
-                # axs_base_error[1, 0].plot(base_pos_error_cumulative, label=f"{model_name}")
-
-                # axs_base_error[0, 1].plot(base_theta_error_running, label=f"{model_name}")
-                # axs_base_error[1, 1].plot(
-                #     base_theta_error_cumulative, label=f"{model_name}"
-                # )
-
-                # axs_ee_error[4].plot(ee_orient_error_running, label=f"{model_name}")
-                # axs_ee_error[5].plot(ee_orient_error_cumulative, label=f"{model_name}")
-
-                # # plot max and total errors
-                # axs_ee_error[2].barh(
-                #     list(model_errors_max_ee.keys()), list(model_errors_max_ee.values())
-                # )
-                # axs_ee_error[3].barh(
-                #     list(model_errors_total_ee.keys()), list(model_errors_total_ee.values())
-                # )
-                # axs_base_error[2, 0].barh(
-                #     list(model_errors_max_base.keys()), list(model_errors_max_base.values())
-                # )
-                # axs_base_error[3, 0].barh(
-                #     list(model_errors_total_base.keys()),
-                #     list(model_errors_total_base.values()),
-                # )
-                # axs_base_error[2, 1].barh(
-                #     list(model_errors_max_base_theta.keys()),
-                #     list(model_errors_max_base_theta.values()),
-                # )
-                # axs_base_error[3, 1].barh(
-                #     list(model_errors_total_base_theta.keys()),
-                #     list(model_errors_total_base_theta.values()),
-                # )
-
-                # axs_ee_error[6].barh(
-                #     list(model_errors_max_ee_orient.keys()),
-                #     list(model_errors_max_ee_orient.values()),
-                # )
-                # axs_ee_error[7].barh(
-                #     list(model_errors_total_ee_orient.keys()),
-                #     list(model_errors_total_ee_orient.values()),
-                # )
-
-                # for i in range(6):
-                #     axs[i, 0].legend(fontsize=8)
-                #     axs[i, 1].legend(fontsize=8)
-                #     axs[i, 2].legend(fontsize=8)
-
-                # for i in range(4):
-                #     axs_ee_error[i].legend(fontsize=8)
-                #     axs_base_error[i, 0].legend(fontsize=8)
-                #     axs_base_error[i, 1].legend(fontsize=8)
-                #     axs_ee_error[i + 4].legend(fontsize=8)
-
-                if self.wandb_logging:
-                    wandb.log(
-                        {
-                            f"sys_id_extra_eval/{traj_id}_{curs}/plot": wandb.Image(fig),
-                            # f"sys_id_extra_eval/{traj_id}/plot": wandb.Image(fig),
-                            # f"sys_id_extra_eval/{traj_id}/ee_error_plot": wandb.Image(
-                            #     fig_ee_error
-                            # ),
-                            # f"sys_id_extra_eval/{traj_id}/base_error_plot": wandb.Image(
-                            #     fig_base_error
-                            # ),
-                        }
+                    base_pos_error = (
+                        jnp.linalg.norm(predictions_decoded[:, 0:2] - segment_targets[:, 0:2], axis=1) ** 2
+                    )
+                    theta_error = (
+                        jnp.linalg.norm(predictions_decoded[:, 2:3] - segment_targets[:, 2:3], axis=1) ** 2
+                    )
+                    ee_pos_error = (
+                        jnp.linalg.norm(predictions_decoded[:, 6:9] - segment_targets[:, 6:9], axis=1) ** 2
+                    )
+                    extra_eval_metrics["base_pos_rmse"] = (
+                        extra_eval_metrics.get("base_pos_rmse", jnp.zeros(base_pos_error.shape))
+                        + base_pos_error
+                    )
+                    extra_eval_metrics["theta_rmse"] = (
+                        extra_eval_metrics.get("theta_rmse", jnp.zeros(theta_error.shape))
+                        + theta_error
+                    )
+                    extra_eval_metrics["ee_pos_rmse"] = (
+                        extra_eval_metrics.get("ee_pos_rmse", jnp.zeros(ee_pos_error.shape))
+                        + ee_pos_error
                     )
 
-            # # calculate rmse across all eval trajectories
-            # for state_label in SPOT_STATE_LABELS:
-            #     state_idx = SPOT_STATE_LABELS.index(state_label)
-            #     extra_eval_metrics[f"{state_label}_rmse"] = jnp.sqrt(
-            #         extra_eval_metrics[f"{state_label}_rmse"] / len(eval_trajectories)
-            #     )
-            # extra_eval_metrics["base_pos_rmse"] = jnp.sqrt(
-            #     extra_eval_metrics["base_pos_rmse"] / len(eval_trajectories)
-            # )
-            # extra_eval_metrics["theta_rmse"] = jnp.sqrt(
-            #     extra_eval_metrics["theta_rmse"] / len(eval_trajectories)
-            # )
-            # extra_eval_metrics["ee_pos_rmse"] = jnp.sqrt(
-            #     extra_eval_metrics["ee_pos_rmse"] / len(eval_trajectories)
-            # )
+                    # detailed error plots
+                    # prepare plots
+                    fig_ee_error, axs_ee_error = plt.subplots(4, 1, figsize=(30, 15))
+                    fig_base_error, axs_base_error = plt.subplots(4, 2, figsize=(30, 15))
 
-            # extra_eval_metrics["ee_orient_rmse"] = jnp.sqrt(
-            #     extra_eval_metrics["ee_orient_rmse"] / len(eval_trajectories)
-            # )
+                    # prepare error plots
+                    axs_ee_error[0].set_title("Running EE position error")
+                    axs_ee_error[1].set_title("Cumulative EE position error")
+                    axs_ee_error[2].set_title("Max EE position error")
+                    axs_ee_error[3].set_title("Total EE position error")
+                    axs_base_error[0, 0].set_title("Running base position error")
+                    axs_base_error[1, 0].set_title("Cumulative base position error")
+                    axs_base_error[2, 0].set_title("Max base position error")
+                    axs_base_error[3, 0].set_title("Total base position error")
+                    axs_base_error[0, 1].set_title("Running base theta error")
+                    axs_base_error[1, 1].set_title("Cumulative base theta error")
+                    axs_base_error[2, 1].set_title("Max base theta error")
+                    axs_base_error[3, 1].set_title("Total base theta error")
 
-            # # log extra eval metrics
-            # if self.wandb_logging:
-            #     for step in range(step_range):
-            #         step_extra_eval_metrics = {
-            #             f"sys_id_extra_eval/{state_label}_rmse": float(
-            #                 extra_eval_metrics[f"{state_label}_rmse"][step]
-            #             )
-            #             for state_label in SPOT_STATE_LABELS
-            #         }
-            #         step_extra_eval_metrics.update(
-            #             {
-            #                 "sys_id_extra_eval/base_pos_rmse": float(
-            #                     extra_eval_metrics["base_pos_rmse"][step]
-            #                 ),
-            #                 "sys_id_extra_eval/theta_rmse": float(
-            #                     extra_eval_metrics["theta_rmse"][step]
-            #                 ),
-            #                 "sys_id_extra_eval/ee_pos_rmse": float(
-            #                     extra_eval_metrics["ee_pos_rmse"][step]
-            #                 ),
-            #                 "sys_id_extra_eval/step": step,
-            #             }
-            #         )
-            #         step_extra_eval_metrics.update(
-            #             {
-            #                 "sys_id_extra_eval/ee_orient_rmse": float(
-            #                     extra_eval_metrics["ee_orient_rmse"][step]
-            #                 )
-            #             }
-            #         )
-            #         wandb.log(step_extra_eval_metrics)
+                    # plot running and cumulative errors
+                    axs_ee_error[0].plot(ee_pos_error_running, label=f"{model_name}")
+                    axs_ee_error[1].plot(ee_pos_error_cumulative, label=f"{model_name}")
 
+                    axs_base_error[0, 0].plot(base_pos_error_running, label=f"{model_name}")
+                    axs_base_error[1, 0].plot(base_pos_error_cumulative, label=f"{model_name}")
+
+                    axs_base_error[0, 1].plot(base_theta_error_running, label=f"{model_name}")
+                    axs_base_error[1, 1].plot(base_theta_error_cumulative, label=f"{model_name}")
+
+                    # plot max and total errors
+                    axs_ee_error[2].barh(
+                        list(model_errors_max_ee.keys()), list(model_errors_max_ee.values())
+                    )
+                    axs_ee_error[3].barh(
+                        list(model_errors_total_ee.keys()), list(model_errors_total_ee.values())
+                    )
+                    axs_base_error[2, 0].barh(
+                        list(model_errors_max_base.keys()), list(model_errors_max_base.values())
+                    )
+                    axs_base_error[3, 0].barh(
+                        list(model_errors_total_base.keys()), list(model_errors_total_base.values())
+                    )
+                    axs_base_error[2, 1].barh(
+                        list(model_errors_max_base_theta.keys()), list(model_errors_max_base_theta.values())
+                    )
+                    axs_base_error[3, 1].barh(
+                        list(model_errors_total_base_theta.keys()),
+                        list(model_errors_total_base_theta.values()),
+                    )
+
+                    for i in range(4):
+                        axs_ee_error[i].legend(fontsize=8)
+                        axs_base_error[i, 0].legend(fontsize=8)
+                        axs_base_error[i, 1].legend(fontsize=8)
+
+                    if self.wandb_logging:
+                        wandb.log(
+                            {
+                                f"sys_id_extra_eval/{traj_id}_{segment_idx}/plot": wandb.Image(fig),
+                                f"sys_id_extra_eval/{traj_id}_{segment_idx}/ee_error_plot": wandb.Image(
+                                    fig_ee_error
+                                ),
+                                f"sys_id_extra_eval/{traj_id}_{segment_idx}/base_error_plot": wandb.Image(
+                                    fig_base_error
+                                ),
+                            }
+                        )
+                else:
+                    if self.wandb_logging:
+                        wandb.log(
+                            {
+                                f"sys_id_extra_eval/{traj_id}_{segment_idx}/plot": wandb.Image(fig),
+                            }
+                        )
+
+        if plot_errors:
+            # calculate rmse across all evaluation trajectories
+            for state_label in SPOT_STATE_LABELS:
+                extra_eval_metrics[f"{state_label}_rmse"] = jnp.sqrt(
+                    extra_eval_metrics[f"{state_label}_rmse"] / len(eval_trajectories)
+                )
+            extra_eval_metrics["base_pos_rmse"] = jnp.sqrt(
+                extra_eval_metrics["base_pos_rmse"] / len(eval_trajectories)
+            )
+            extra_eval_metrics["theta_rmse"] = jnp.sqrt(
+                extra_eval_metrics["theta_rmse"] / len(eval_trajectories)
+            )
+            extra_eval_metrics["ee_pos_rmse"] = jnp.sqrt(
+                extra_eval_metrics["ee_pos_rmse"] / len(eval_trajectories)
+            )
+
+            # log extra evaluation metrics
+            if self.wandb_logging:
+                for step in range(len(observations_decoded)):
+                    step_extra_eval_metrics = {
+                        f"sys_id_extra_eval/{state_label}_rmse": float(
+                            extra_eval_metrics[f"{state_label}_rmse"][step]
+                        )
+                        for state_label in SPOT_STATE_LABELS
+                    }
+                    step_extra_eval_metrics.update(
+                        {
+                            "sys_id_extra_eval/base_pos_rmse": float(
+                                extra_eval_metrics["base_pos_rmse"][step]
+                            ),
+                            "sys_id_extra_eval/theta_rmse": float(
+                                extra_eval_metrics["theta_rmse"][step]
+                            ),
+                            "sys_id_extra_eval/ee_pos_rmse": float(
+                                extra_eval_metrics["ee_pos_rmse"][step]
+                            ),
+                            "sys_id_extra_eval/step": step,
+                        }
+                    )
+                    wandb.log(step_extra_eval_metrics)
 
 if __name__ == "__main__":
     # TODO: add test

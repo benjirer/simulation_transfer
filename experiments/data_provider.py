@@ -11,14 +11,8 @@ from brax.training.types import Transition
 
 from experiments.util import load_csv_recordings
 from sim_transfer.sims.car_sim_config import OBS_NOISE_STD_SIM_CAR
+from sim_transfer.sims.spot_sim_config import SPOT_DEFAULT_OBSERVATION_NOISE_STD
 from sim_transfer.sims.spot_sim_config import (
-    SPOT_DEFAULT_OBSERVATION_NOISE_STD,
-    SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
-)
-from sim_transfer.sims.spot_sim_config import (
-    SPOT_STATE_MASK,
-    SPOT_ACTION_MASK,
-    SPOT_GOAL_MASK,
     SPOT_STATE_LENGTH,
     SPOT_STATE_LENGTH_ENCODED,
     SPOT_ACTION_LENGTH,
@@ -72,7 +66,7 @@ DEFAULTS_RACECAR = {
 DEFAULTS_RACECAR_REAL = {"sampling": "consecutive", "num_samples_test": 10000}
 
 DEFAULTS_SPOT = {
-    "obs_noise_std": SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
+    "obs_noise_std": SPOT_DEFAULT_OBSERVATION_NOISE_STD,
     "x_support_mode_train": "full",
     "param_mode": "random",
 }
@@ -90,18 +84,10 @@ _RACECAR_NOISE_STD_ENCODED = 20 * jnp.concatenate(
 
 _SPOT_NOISE_STD_ENCODED = 20 * jnp.concatenate(
     [
-        # TODO Temporary
         DEFAULTS_SPOT["obs_noise_std"][:2],
         DEFAULTS_SPOT["obs_noise_std"][2:3],
         DEFAULTS_SPOT["obs_noise_std"][2:3],
         DEFAULTS_SPOT["obs_noise_std"][3:12],
-        DEFAULTS_SPOT["obs_noise_std"][12:13],
-        DEFAULTS_SPOT["obs_noise_std"][12:13],
-        DEFAULTS_SPOT["obs_noise_std"][13:14],
-        DEFAULTS_SPOT["obs_noise_std"][13:14],
-        DEFAULTS_SPOT["obs_noise_std"][14:15],
-        DEFAULTS_SPOT["obs_noise_std"][14:15],
-        DEFAULTS_SPOT["obs_noise_std"][15:],
     ]
 )
 
@@ -422,27 +408,6 @@ def stack_spot_actions(
         u = u_stacked
     return u
 
-from jax.scipy.spatial.transform import Rotation as JaxRotation
-
-def transform_state_omega(states):
-    def transform_single_state(s):
-        # euler angles: roll (x), pitch (y), yaw (z) of hand frame wrt world frame
-        roll = jnp.arctan2(s[13], s[14])   # sin_ee_rx, cos_ee_rx
-        pitch = jnp.arctan2(s[15], s[16])  # sin_ee_ry, cos_ee_ry
-        yaw = jnp.arctan2(s[17], s[18])    # sin_ee_rz, cos_ee_rz
-        rotation = JaxRotation.from_euler('xyz', jnp.array([roll, pitch, yaw]))
-
-        # extract angular velocity (currently in world frame)
-        omega_global = s[19:22]
-
-        omega_hand = rotation.apply(omega_global, inverse=True)
-        s = s.at[19:22].set(omega_hand)
-        return s
-
-    # Vectorize the transformation across the batch
-    transformed_states = jax.vmap(transform_single_state)(states)
-    return transformed_states
-
 def _prepare_spot_datasets(
     dataset_pre: List[Transition],
     encode_angles: bool = True,
@@ -457,9 +422,10 @@ def _prepare_spot_datasets(
     u = jnp.array([d.action for d in dataset_pre])
     y = jnp.array([d.next_observation for d in dataset_pre])
 
-    # # transform omega from world to hand frame
-    # x = transform_state_omega(x)
-    # y = transform_state_omega(y)
+    # cut and check dimensions
+    x = x[..., :SPOT_STATE_LENGTH_ENCODED]
+    u = u[..., :SPOT_ACTION_LENGTH]
+    y = y[..., :SPOT_STATE_LENGTH_ENCODED] 
 
     assert (
         x.shape[-1] == SPOT_STATE_LENGTH_ENCODED
@@ -478,9 +444,6 @@ def _prepare_spot_datasets(
     x = decode_angles_spot_fn(x, angle_idx=angle_idx)
     y = decode_angles_spot_fn(y, angle_idx=angle_idx)
 
-    # save raw y for goal addition
-    y_raw = copy.deepcopy(y)
-
     # action stacking
     u = stack_spot_actions(
         u=u,
@@ -493,39 +456,30 @@ def _prepare_spot_datasets(
         y = encode_angles_spot_fn(y, angle_idx=angle_idx)
 
     # remove first n steps (since often not much is happening)
-    x, u, y, y_raw = (
+    x, u, y = (
         x[skip_first_n:],
         u[skip_first_n:],
         y[skip_first_n:],
-        y_raw[skip_first_n:],
     )
     
     # add goal to the state
     if add_goal:
         # steps to look ahead
-        k = 4
+        k = 10
 
         # define starting and ending indices for position and orientation
         pos_goal_start_idx = 7 if encode_angles else 6
         pos_goal_end_idx = pos_goal_start_idx + 3
-        orient_goal_start_idx = 13 if encode_angles else 12
-        orient_goal_end_idx = orient_goal_start_idx + 6
 
         # extract goals
         pos_goal = y[k:, pos_goal_start_idx:pos_goal_end_idx]
-        orient_goal = y[k:, orient_goal_start_idx:orient_goal_end_idx]
-        # TODO: fix goal dims
-        goal = orient_goal
-        # goal = jnp.concatenate([pos_goal, orient_goal], axis=1)
 
         # padding for the last goal (repeat the last goal k times)
         last_pos_goal = y[-1, pos_goal_start_idx:pos_goal_end_idx]
-        last_orient_goal = y[-1, orient_goal_start_idx:orient_goal_end_idx]
-        # TODO: Fix goal dims
-        # last_goal = jnp.concatenate([last_pos_goal, last_orient_goal], axis=0)
-        last_goal = last_orient_goal
-        padding = jnp.tile(last_goal, (k, 1))
-        goal = jnp.concatenate([goal, padding], axis=0)
+        padding = jnp.tile(last_pos_goal, (k, 1))
+
+        # set goal
+        goal = jnp.concatenate([pos_goal, padding], axis=0)
 
         assert (
             x.shape[0] == y.shape[0] == u.shape[0] == goal.shape[0]
@@ -559,8 +513,9 @@ def get_spot_recorded_data(
     recordings_dirs = [
         # os.path.join(DATA_DIR, "recordings_spot_ee_v0"),
         # os.path.join(DATA_DIR, "recordings_spot_ee_v1"),
-        # os.path.join(DATA_DIR, "recordings_spot_ee_v2"),
-        os.path.join(DATA_DIR, "recordings_spot_ee_v3"),
+        # os.path.join(DATA_DIR, "recordings_spot_ee_vision_v2"),
+        # os.path.join(DATA_DIR, "recordings_spot_ee_v3"),
+        os.path.join(DATA_DIR, "recordings_spot_v5"),
     ]
     files = sorted(
         [
@@ -1083,79 +1038,6 @@ def provide_data_and_sim(
     return x_train, y_train, x_test, y_test, sim_lf
 
 
-# sample data directly from spot simulator
-def sample_from_spot_sim(
-    num_samples: int = 1000,
-    num_stacked_actions: int = 0,
-    eval_directly: bool = False,
-):
-    from sim_transfer.sims.simulators import SpotSim
-
-    sim = SpotSim(encode_angle=True)
-    if num_stacked_actions > 0:
-        sim = StackedActionSimWrapper(
-            sim, num_stacked_actions=num_stacked_actions, action_size=SPOT_ACTION_LENGTH
-        )
-
-    if not eval_directly:
-        # define actions u
-        # u = base_vx, base_vy, base_vtheta, ee_vx, ee_vy, ee_vz, ee_vrx, ee_vry, ee_vrz
-        # u has shape (num_samples, 9)
-        # make actions be sin of time for vrx, zero for all others
-        t = jnp.linspace(0, 10, num_samples)
-        u = jnp.zeros((num_samples, 9))
-        u = u.at[:, 6].set(jnp.sin(t))
-        u = u.at[:, 7].set(jnp.cos(t))
-
-        # u 0 sould be 0.1
-        u = u.at[:, 0].set(0.1)
-        u = u.at[:, 4].set(0.1)
-
-        # stack the actions
-        u = stack_spot_actions(
-            u=u,
-            num_stacked_actions=num_stacked_actions,
-            action_dim=SPOT_ACTION_LENGTH,
-        )
-
-        # define initial state x
-        x_init = jnp.zeros((SPOT_STATE_LENGTH))
-        x_init = jnp.expand_dims(x_init, axis=0)
-
-        x_train = []
-        y_train = []
-
-        # simulate the system for num_samples
-        x = x_init
-        for i in range(num_samples):
-            u_input = jnp.expand_dims(u[i], axis=0)
-            x_input = jnp.concatenate([x, u_input], axis=-1)
-            y = sim._typical_f(x_input)
-            x_train.append(x)
-            y_train.append(y)
-            x = y
-
-        x_train = jnp.concatenate(x_train, axis=0)
-        x_train = jnp.concatenate([x_train, u], axis=-1)
-        y_train = jnp.concatenate(y_train, axis=0)
-
-        # split
-        amount_train = int(num_samples * 0.8)
-        x_train, y_train = x_train[:amount_train], y_train[:amount_train]
-        x_test, y_test = x_train[amount_train:], y_train[amount_train:]
-
-    else:
-        x_train, y_train, x_test, y_test = sim.sample_datasets(
-            rng_key=jax.random.PRNGKey(1234),
-            num_samples_train=int(num_samples * 0.8),
-            num_samples_test=int(num_samples * 0.2),
-            obs_noise_std=SPOT_DEFAULT_OBSERVATION_NOISE_STD_WITH_EE_ORIENTATION,
-            param_mode="typical",
-        )
-
-    return x_train, y_train, x_test, y_test, sim
-
-
 if __name__ == "__main__":
     # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(data_source='real_racecar_new',
     #                                                              data_spec={'num_samples_train': 10000})
@@ -1163,75 +1045,10 @@ if __name__ == "__main__":
     #                                                              data_spec={'num_samples_train': 10000})
 
     # test spot data
-    # x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
-    #     data_source="spot_real",
-    #     data_spec={"num_samples_train": 5000, "num_samples_test": 50, "num_stacked_actions": 2},
-    # )
-    # print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
-
-    # print(jnp.max(x_train, axis=0))
-
-    # test spot sim data sampinling
-    num_stacked_actions = 2
-    x, y, x_test, y_test, sim = sample_from_spot_sim(
-        num_samples=100, num_stacked_actions=num_stacked_actions, eval_directly=True
+    x_train, y_train, x_test, y_test, sim = provide_data_and_sim(
+        data_source="spot_real",
+        data_spec={"num_samples_train": 5000, "num_samples_test": 50, "num_stacked_actions": 2},
     )
-    # plot all data
-    import matplotlib.pyplot as plt
+    print(x_train.shape, y_train.shape, x_test.shape, y_test.shape)
 
-    # labels
-    state_labels = [
-        "base_x",
-        "base_y",
-        "sin_base_theta",
-        "cos_base_theta",
-        "base_vx",
-        "base_vy",
-        "base_vtheta",
-        "ee_x",
-        "ee_y",
-        "ee_z",
-        "ee_vx",
-        "ee_vy",
-        "ee_vz",
-        "ee_rx",
-        "ee_ry",
-        "ee_rz",
-        "ee_vrx",
-        "ee_vry",
-        "ee_vrz",
-    ]
-
-    action_labels = [
-        "base_vx",
-        "base_vy",
-        "base_vtheta",
-        "ee_vx",
-        "ee_vy",
-        "ee_vz",
-        "ee_vrx",
-        "ee_vry",
-        "ee_vrz",
-    ]
-
-    n_rows = len(state_labels) + len(action_labels)
-    n_cols = 2
-
-    fig, axs = plt.subplots(n_rows, n_cols, figsize=(15, 30))
-
-    for i in range(n_rows):
-        if i < len(state_labels):
-            # axs[i, 0].plot(x[:, i], label='x')
-            axs[i, 0].plot(y[:, i], label="y")
-            axs[i, 0].set_title(f"{state_labels[i]}")
-        else:
-            axs[i, 0].plot(x[:, i], label="u_t_0")
-            if num_stacked_actions > 0:
-                axs[i, 0].plot(x[:, i + 9], label="u_t_1")
-            if num_stacked_actions > 1:
-                axs[i, 0].plot(x[:, i + 18], label="u_t_2")
-            axs[i, 0].set_title(f"{action_labels[i - len(state_labels)]}")
-        axs[i, 0].legend()
-
-    # save in file
-    plt.savefig("sim_sampled_data.png")
+    print(jnp.max(x_train, axis=0))
