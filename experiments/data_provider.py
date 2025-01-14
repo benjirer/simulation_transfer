@@ -465,7 +465,7 @@ def _prepare_spot_datasets(
     # add goal to the state
     if add_goal:
         # steps to look ahead
-        k = 10
+        k = 5
 
         # define starting and ending indices for position and orientation
         pos_goal_start_idx = 7 if encode_angles else 6

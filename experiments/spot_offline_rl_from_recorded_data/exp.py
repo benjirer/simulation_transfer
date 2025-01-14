@@ -65,17 +65,17 @@ def experiment(
     OUTPUTSCALE_SPOT: list = [
         0.2, # base x
         0.2, # base y
-        0.02, # base sin theta
-        0.02, # base cos theta
-        0.02, # base vx
-        0.02, # base vy
-        0.02, # base vtheta
+        0.2, # base sin theta
+        0.2, # base cos theta
+        0.2, # base vx
+        0.2, # base vy
+        0.2, # base vtheta
         0.2, # ee x
         0.2, # ee y
         0.2, # ee z
-        0.02, # ee vx
-        0.02, # ee vy
-        0.02, # ee vz
+        0.2, # ee vx
+        0.2, # ee vy
+        0.2, # ee vz
     ],
 
 ):
@@ -361,7 +361,7 @@ def experiment(
         # evaluate learned model
         rl_from_offline_data.eval_model_on_dedicated_data(bnn_model=bnn_model)
         
-        # evaluate policy on learned model
+        # # evaluate policy on learned model
         rl_from_offline_data.evaluate_policy(
             policy,
             bnn_model,

@@ -23,9 +23,16 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
     # random_seed = [9126, 17, 49]
     # new seeds: id1 = 49, id2 = 9126, id3 = 27
     # random_seed = [9126, 27, 49]
-    random_seed = [49, 9126, 27]
+    # random_seed = [49, 9126, 27]
+    # random_seed = [99, 137, 332, 199203]
+
+    random_seed = [137, 332, 417]
     # num_offline_collected_transitions = [2000, 4000, 8000]
-    num_offline_collected_transitions = [2000, 3000, 4000, 8000, 10000]
+    # num_offline_collected_transitions = [2000, 3000, 4000, 8000, 10000]
+    # num_offline_collected_transitions = [2000, 4000, 8000, 10000]
+    # num_offline_collected_transitions = [4000, 6000, 8000]
+    # num_offline_collected_transitions = [1000, 2000, 4000, 6000, 8000]
+    num_offline_collected_transitions = [500, 1000, 2000, 3000, 4000, 5000]
 
 
     parameters = {
@@ -35,24 +42,24 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "num_offline_collected_transitions": num_offline_collected_transitions,
         "test_data_ratio": [0.15],
         "wandb_logging": [True],
-        "project_name": ["shape_tracing_new_data_v15"],
+        "project_name": ["testing_rl_v24"],
         "obtain_consecutive_data": [1],
         "save_traj_local": [False],
     }
 
     parameters_rl = {
         # parameters rl
-        "horizon_len": [100],
+        "horizon_len": [120],
         "sac_num_env_steps": [2_500_000],
         "best_policy": [1],
-        "margin_factor": [5.0],
-        "bound": [0.1],
+        "margin_factor": [10.0],
+        "bound": [0.15],
         "ctrl_cost_weight": [0.1],
         "ctrl_diff_weight": [0.3],
-        "base_linear_action_cost_weight": [1.5],
-        "base_theta_action_cost_weight": [1.5],
+        "base_linear_action_cost_weight": [2.0],
+        "base_theta_action_cost_weight": [2.0],
         "ee_action_cost_weight": [0.5],
-        "share_of_x0s_in_sac_buffer": [0.5],
+        "share_of_x0s_in_sac_buffer": [0.0],
         "eval_only_on_init_states": [1],
         "eval_on_all_offline_data": [1],
         "train_sac_only_from_init_states": [0],
@@ -74,7 +81,7 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
         "num_epochs": [100],
         "max_train_steps": [200_000],
         "min_train_steps": [10_000],
-        "num_sim_fitting_steps": [40_000],
+        "num_sim_fitting_steps": [10_000],
         "length_scale_aditive_sim_gp": [1.0],
         "lr": [1e-3],
     }
@@ -118,7 +125,9 @@ def main(model: str, mode: str, num_cpus: int, num_gpus: int, mem: int):
 if __name__ == "__main__":
     """Experiment settings"""
     # models = ["sim-model", "bnn-sim-fsvgd", "bnn-fsvgd"]
-    models = ["bnn-sim-fsvgd", "bnn-fsvgd", "sim-model"]
+    # models = ["bnn-sim-fsvgd", "bnn-fsvgd", "sim-model"]
+    # models = ["bnn-fsvgd", "bnn-sim-fsvgd", "sim-model"]
+    models = ["sim-model"]
     mode = "local"
     num_cpus = 1
     num_gpus = 1

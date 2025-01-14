@@ -955,7 +955,8 @@ class RLFromOfflineData:
             ),
             "data",
         )
-        test_data_dir = os.path.join(DATA_DIR, "test_data_spot_ee_v1")
+        # test_data_dir = os.path.join(DATA_DIR, "test_data_spot_ee_v1")
+        test_data_dir = os.path.join(DATA_DIR, "test_data_spot_v2")
         eval_trajectories_paths = sorted(
             [
                 os.path.join(test_data_dir, f)

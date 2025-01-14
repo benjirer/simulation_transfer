@@ -414,6 +414,9 @@ class BNNGreyBox(AbstractRegressionModel):
                 if log_to_wandb:
                     log_dict = {f'regression_model_training/{n}': float(v) for n, v in stats_agg.items()}
                     wandb.log(log_dict | {'x_axis/bnn_step': step})
+                    # log the sim params
+                    for n, v in self.params_sim['sim_params']._asdict().items():
+                        wandb.log({f'sim_params/{n}': float(v)})
                 stats_msg = ' | '.join([f'{n}: {v:.4f}' for n, v in stats_agg.items()])
                 msg = (f'Step {step}/{num_sim_model_train_steps} | {stats_msg} | Duration {duration_sec:.2f} sec | '
                        f'Time per sample {duration_per_sample_ms:.2f} ms')
@@ -432,6 +435,9 @@ class BNNGreyBox(AbstractRegressionModel):
             print(f'Keeping the best model with {metrics_objective}={best_objective:.4f}')
             if log_to_wandb:
                 wandb.log({metrics_objective: best_objective})
+                # log best sim params
+                for n, v in best_params['sim_params']._asdict().items():
+                    wandb.log({f'best_sim_params/{n}': float(v)})
 
     def fit_sim_prior_with_scan(self, x_train: jnp.ndarray, y_train: jnp.ndarray, x_eval: Optional[jnp.ndarray] = None,
                                 y_eval: Optional[jnp.ndarray] = None,
